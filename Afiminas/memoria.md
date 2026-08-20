@@ -419,12 +419,54 @@ Verificadas em **2026-08-10**:
 
 ## 11. Pendências
 
-1. **Hospedagem:** cloud (qual provedor/região) ou VM on-premise? — *não respondido*
-2. Domínio corporativo para o console e quem administra o DNS.
+1. ~~**Hospedagem:** cloud ou VM on-premise?~~ — ✅ **RESOLVIDA em 2026-08-20.** Ver §11.1.
+2. **Domínio corporativo** para o console e quem administra o DNS — **único item no caminho crítico** (§11.1).
 3. Quantidade estimada de dispositivos/clientes.
 4. Hierarquia de grupos desejada (por cliente? por região? por tipo?).
-5. Destino do backup externo.
+5. Destino do backup externo — a mecânica está pronta (`Server-Config.txt` §13), falta o destino físico.
 6. **Branding — são dois, com custos incomparáveis.** Ver §11.6 abaixo.
+
+### 11.1 Hospedagem — decidida (2026-08-20)
+
+**On-premise, virtualizada em Proxmox VE**, em host próprio. Nuvem foi descartada.
+
+Dimensionamento, escolha de SO e o passo a passo completo vivem em dois
+documentos na raiz do repositório: **`Server-Install.txt`** (o que é preciso ter)
+e **`Server-Config.txt`** (do Proxmox zerado ao healthcheck passando).
+
+| | Decisão |
+|---|---|
+| Hipervisor | Proxmox VE 9.x, ZFS mirror em 2 SSDs |
+| Host | 6-8 threads, 16 GB RAM, nobreak com comunicação USB (NUT) |
+| SO das VMs | Debian 13 (trixie), instalação mínima |
+| **VM (KVM), não LXC** | Docker em LXC exige privilégios/ajustes frágeis e `network_mode: host` interage mal com a rede do container. São ~200 MB economizados no plano de controle da frota — não compensa |
+| **Duas VMs, uma por ambiente** | `azuredesk-hml` (2 vCPU/2 GB) e `azuredesk-prd` (4 vCPU/4 GB). Não é preferência: com `network_mode: host` os dois ambientes **colidiriam em 21114-21117** na mesma VM |
+
+**O dimensionamento é de banda, não de CPU.** `hbbs`/`hbbr` são binários Rust e o
+console é Go + SQLite — a stack raramente passa de 1 GB de RAM efetiva. O
+recurso escasso é **upload**, e só para o tráfego que cai em relay (`hbbr`):
+cerca de 12 Mbps para 10 técnicos simultâneos. O espelho de disco não é sobre
+desempenho, é sobre o `id_ed25519` (§7).
+
+**O que a decisão traz junto** — três responsabilidades que um provedor absorveria:
+
+1. **CGNAT é o bloqueador nº 1.** Sem IP público não há port forward, e o projeto
+   não sobe. O teste de 30 segundos está em `Server-Install.txt` §1.1 e precisa
+   ser feito **antes** de qualquer compra.
+2. **Energia.** Nobreak deixa de ser acessório: queda de luz = frota sem canal de
+   suporte, e SQLite interrompido no meio de uma escrita.
+3. **Link.** A disponibilidade do suporte remoto passa a ser igual à do link.
+
+**Alternativa registrada para decisão consciente:** manter homologação no Proxmox
+local e produção num VPS em São Paulo desacoplaria o SLA do cliente da
+infraestrutura física. Não foi o caminho escolhido.
+
+**Por que isso torna o §11.2 urgente:** o `ID Server` e o `API Server` ficam
+gravados na configuração de **cada endpoint instalado**. Subir a frota apontando
+para IP e migrar depois para `https://<domínio>` significa reconfigurar máquina
+por máquina. A seção de HTTPS (Nginx + Certbot, inclusive DNS-01 para link com a
+porta 80 bloqueada) já está escrita em `Server-Config.txt` §12 — está bloqueada
+só pela falta do domínio.
 
 ### 11.6 Os dois brandings
 
@@ -547,3 +589,4 @@ proteção de branch. Registrado como risco em §10.
 | 2026-08-20 | Levantado o **modelo de dados do console** (§6.2) a partir de `db.go` e `model/*.go`: `device`, `peer`/`address_book`/`tags`, `audit` e `file_transfer`. Confirmado que o log de conexão existe e é reportado pelo endpoint acessado, não pelo servidor. Drivers: SQLite e MySQL, sem PostgreSQL. Dois achados novos (9 e 10). |
 | 2026-08-20 | Console **fixado por digest** (`@sha256:cd35bd…`) e fonte **espelhada** em fork próprio, tagueada `azuredesk-v0.1.0`. Fecha o achado 8. Decidido **não** compilar imagem própria sem necessidade de personalização — o fork é seguro de fonte, não pipeline de build. Ver §3.2. |
 | 2026-08-20 | Registrado o achado 11 (não há painel de configuração no console: `system_settings` existe mas nenhuma rota a expõe) e detalhada a pendência §11.6, **separando os dois brandings** — console web (barato, rebuild do frontend) e cliente RustDesk (caro, fork em Rust + certificado de assinatura). Só o segundo é visível ao cliente da farmácia. |
+| 2026-08-20 | **Pendência §11.1 resolvida: hospedagem on-premise em Proxmox VE**, nuvem descartada. Criados `Server-Install.txt` (hardware, rede e SO, com a justificativa de cada escolha) e `Server-Config.txt` (do hipervisor zerado ao healthcheck passando, em 15 seções). Decisões registradas: Debian 13 nas VMs, **VM e não LXC**, e **duas VMs** porque `network_mode: host` faria homologação e produção colidirem em 21114-21117. Dimensionamento por **upload**, não por CPU. Levantados três riscos que o on-premise cria — CGNAT como bloqueador nº 1, energia e link — e o §12 de HTTPS ficou escrito e pronto, bloqueado apenas pelo domínio (§11.2), agora o único item no caminho crítico. |
