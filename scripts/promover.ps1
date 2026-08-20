@@ -141,7 +141,7 @@ if ($Versao -or $VersaoAgente -or $ImagemConsole -or $ImagemServidor) {
                 Aviso "SHA256 obtido da API do GitHub (asset de $([math]::Round($asset.size/1MB,1)) MB)."
             }
         } catch {
-            Erro "Não foi possível consultar a release $VersaoAgente: $_"
+            Erro "Não foi possível consultar a release ${VersaoAgente}: $_"
         }
 
         if (-not $hash) {
