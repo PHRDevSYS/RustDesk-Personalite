@@ -41,7 +41,7 @@ Técnico (cliente RustDesk)
 | Camada | Componente | Origem |
 |---|---|---|
 | Protocolo remoto (P2P, relay, cripto) | `hbbs` / `hbbr` | RustDesk oficial, AGPL-3.0 |
-| Console / API (lista, grupos, address book) | `lantongxue/rustdesk-api-server-pro` | Terceiro, AGPL-3.0 |
+| Console / API (lista, grupos, address book) | `lantongxue/rustdesk-api-server-pro` | Terceiro, AGPL-3.0 — [fonte espelhada](https://github.com/PHRDevSYS/rustdesk-api-server-pro), imagem fixada por digest |
 | Reverse proxy HTTPS | Nginx + Certbot | — |
 
 ## Ambientes

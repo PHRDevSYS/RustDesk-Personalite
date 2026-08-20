@@ -108,6 +108,25 @@ docker buildx imagetools inspect ghcr.io/lantongxue/rustdesk-api-server-pro:late
 .\scripts\promover.ps1 -ImagemConsole 'ghcr.io/lantongxue/rustdesk-api-server-pro@sha256:...'
 ```
 
+Sem Docker à mão, o digest sai da própria API do registry:
+
+```bash
+T=$(curl -s "https://ghcr.io/token?scope=repository:lantongxue/rustdesk-api-server-pro:pull&service=ghcr.io" | jq -r .token)
+curl -sI -H "Authorization: Bearer $T"   -H "Accept: application/vnd.oci.image.index.v1+json"   https://ghcr.io/v2/lantongxue/rustdesk-api-server-pro/manifests/latest | grep -i docker-content-digest
+```
+
+**Ao fixar um digest novo, tague o fork no commit correspondente:**
+
+```bash
+SHA=$(gh api repos/PHRDevSYS/rustdesk-api-server-pro/git/ref/heads/master --jq .object.sha)
+gh api -X POST repos/PHRDevSYS/rustdesk-api-server-pro/git/refs   -f ref="refs/tags/azuredesk-vX.Y.Z" -f sha="$SHA"
+```
+
+O fork ([`PHRDevSYS/rustdesk-api-server-pro`](https://github.com/PHRDevSYS/rustdesk-api-server-pro))
+existe como **seguro de código-fonte**, não como pipeline de build: o upstream é
+de uma pessoa só e pode sumir. A tag amarra cada release nosso a um par
+binário + fonte. Ver `Afiminas/memoria.md` §3.2.
+
 ---
 
 ## 4. Auto-update do servidor

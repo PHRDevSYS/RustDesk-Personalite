@@ -114,18 +114,45 @@ heartbeat e sysinfo.
 |---|---|---|---|
 | `hbbs` | `rustdesk/rustdesk-server:latest` | AGPL-3.0 | ID Server / Rendezvous / signaling |
 | `hbbr` | `rustdesk/rustdesk-server:latest` | AGPL-3.0 | Relay (fallback quando P2P falha) |
-| Console / API | `ghcr.io/lantongxue/rustdesk-api-server-pro:latest` | AGPL-3.0 | Console web, dispositivos, grupos, address book |
+| Console / API | `ghcr.io/lantongxue/rustdesk-api-server-pro@sha256:cd35bddb8bd8e2ced37c281dda6262b62b2cebfc9f6fa42f87eccf228846d8e3` | AGPL-3.0 | Console web, dispositivos, grupos, address book |
 | Reverse proxy | `nginx` + Certbot | — | HTTPS do console (etapa pós-PoC) |
 
 ### 3.1 Candidatos avaliados (dados de 2026-08-10)
 
 | Projeto | Licença | ★ | Último commit | Família | Avaliação |
 |---|---|---|---|---|---|
-| [lantongxue/rustdesk-api-server-pro](https://github.com/lantongxue/rustdesk-api-server-pro) | AGPL-3.0 | 334 | 2026-04-20 | **A** | **ESCOLHIDO** para o PoC. Go + SQLite, API server puro sobre hbbs/hbbr oficiais |
+| [lantongxue/rustdesk-api-server-pro](https://github.com/lantongxue/rustdesk-api-server-pro) | AGPL-3.0 | 334 | 2026-04-20 | **A** | **ESCOLHIDO** para o PoC. Go + SQLite, API server puro sobre hbbs/hbbr oficiais. Espelhado (§3.2) |
 | [UNITRONIX/BetterDesk](https://github.com/UNITRONIX/BetterDesk) | AGPL-3.0 | 334 | 2026-08-09 | B | **Plano B.** Mais completo e mais ativo, mas substitui hbbs+hbbr. Auto-registro com modos Open/Managed/Locked, RBAC, grupos, WoL. Windows marcado "Tier 3: Experimental" |
 | [marcpope/cortendesk](https://github.com/marcpope/cortendesk) | AGPL-3.0 | 75 | 2026-08-10 | A ou B | Laravel/PHP. Suporta hbbs/hbbr existentes (`CORTENDESK_EMBEDDED_SERVER=false`). **Criado em 2026-07-23 — imaturo demais para produção agora**, reavaliar em 6 meses |
 | [lejianwen/rustdesk-api](https://github.com/lejianwen/rustdesk-api) | MIT | 3.062 | 2025-09-28 | A | O mais popular, mas **~10 meses sem commit e 110 issues abertas**. Descartado por vitalidade |
 | [kingmo888/rustdesk-api-server](https://github.com/kingmo888/rustdesk-api-server) | — | 1.565 | 2024-09-25 | A | Django. ~23 meses parado — considerar morto |
+
+### 3.2 Espelho do console (fork) — 2026-08-20
+
+O console é o projeto de **uma pessoa só**, sem releases tagueadas e sem
+garantia de permanência. Duas consequências que o mesmo gesto resolve:
+
+| Problema | Resolução |
+|---|---|
+| Imagem só em `:latest` — upgrade imprevisível, produção sem âncora de versão | Digest fixado no `release/manifest.json` |
+| Se o repositório upstream sumir, perdemos o **código-fonte** e ficamos presos à imagem baixada | Fork em [`PHRDevSYS/rustdesk-api-server-pro`](https://github.com/PHRDevSYS/rustdesk-api-server-pro) |
+
+**Convenção adotada:** a cada imagem fixada, o fork ganha uma tag com a versão
+do nosso release, amarrando binário e fonte.
+
+| Nosso release | Tag no fork | Commit upstream | Digest da imagem |
+|---|---|---|---|
+| 0.1.0 | `azuredesk-v0.1.0` | `631c3a7` (2026-04-20T07:04:58Z) | `sha256:cd35bddb8bd8e2ced37c281dda6262b62b2cebfc9f6fa42f87eccf228846d8e3` |
+
+A correspondência foi verificada pelo label `created` da imagem
+(`2026-04-20T07:08:00Z`) — três minutos após o commit. A imagem **não** carrega
+`org.opencontainers.image.revision`, então essa é uma correlação por horário,
+não uma prova criptográfica. Para ter prova, seria preciso compilar do fork.
+
+**Decisão: não compilamos imagem própria agora.** Sem personalização, o build
+próprio não acrescenta nada que o digest já não garanta, e passaria a ser mais
+uma peça a manter. O fork é o seguro; compilar dele só se torna necessário se o
+upstream desaparecer ou se um dia o branding do console entrar (§11.6).
 
 ---
 
@@ -284,7 +311,7 @@ Achados 1 a 8 **ainda não confirmados em execução** — são o primeiro item 
 | 5 | `ADMIN_USER`/`ADMIN_PASS` só criam o admin no primeiro boot (guardado por `.init.lock`) | Trocar as env vars depois não tem efeito | Documentado no README do PoC |
 | 6 | Porta default do Go é `:8080`; do `server.yaml` versionado é `:12345` | Divergência conforme qual config é lida | Fixar `:21114` explicitamente |
 | 7 | `timeZone` default `Asia/Shanghai` | Timestamps errados nos registros | Fixar `America/Sao_Paulo` |
-| 8 | Repositório **sem releases tagueadas**; só imagem `:latest` | Sem previsibilidade de versão | Registrar o digest da imagem em uso (§9) |
+| 8 | Repositório **sem releases tagueadas**; só imagem `:latest` | Sem previsibilidade de versão | ✅ Digest fixado no manifesto + fonte espelhada em fork (§3.2) |
 | 9 | `PostAuditFile` grava `Uuid: gjson.GetBytes(body, "type").String()` — lê o campo `type` e guarda na coluna `uuid` | Log de **transferência de arquivo** sai com UUID errado. Não afeta `audit` | Nenhuma. Defeito upstream; não usar `file_transfer.uuid` para correlacionar |
 | 10 | Tabela `audit` **sem retenção nem rotação** | Cresce indefinidamente; entra no dimensionamento do backup de `server.db` | Acompanhar o tamanho; purga manual se necessário |
 
@@ -366,7 +393,7 @@ Verificadas em **2026-08-10**:
 |---|---|---|
 | RustDesk Client | 1.4.9 (2026-07-06) | ⬜ a fixar |
 | rustdesk-server (OSS) | 1.1.16 (2026-07-20) | ⬜ a fixar |
-| `rustdesk-api-server-pro` | sem release tagueada — só `:latest` | ⬜ registrar digest |
+| `rustdesk-api-server-pro` | sem release tagueada — só `:latest` | ✅ `@sha256:cd35bddb8bd8…` (§3.2) |
 | Docker / Compose | — | ⬜ |
 | SO do servidor | — | ⬜ |
 
@@ -379,7 +406,7 @@ Verificadas em **2026-08-10**:
 | Risco | Impacto | Mitigação |
 |---|---|---|
 | Console de terceiros quebra em upgrade do cliente | Perda da lista/auto-registro | Família A: conexões continuam. Fixar versão do cliente e testar upgrade antes |
-| Projeto de terceiros abandonado | Sem correções | 3 alternativas mapeadas (§3.1); migração só troca o console, não o servidor |
+| Projeto de terceiros abandonado ou removido do GitHub | Sem correções; perda do código-fonte | Fonte espelhada em fork próprio (§3.2); 3 alternativas mapeadas (§3.1); migração só troca o console, não o servidor |
 | Perda de `id_ed25519` | Reconfigurar **todos** os clientes | Backup + teste de restore |
 | Sem suporte comercial | Incidente sem SLA | Aceito conscientemente com o escopo gratuito |
 | Imagem só em `:latest` | Upgrade não previsível | Digest fixado no manifesto de release (§12.2) |
@@ -425,6 +452,10 @@ linha. A branch já identifica o ambiente.
 vigente". Servidor e endpoint leem o mesmo arquivo, cada um da branch do seu
 ambiente. Resolve a pendência de §9 (evitar `latest`): o digest do console fica
 no manifesto, não espalhado em `.env` de cada host.
+
+Quando o digest do console muda, o fork recebe uma tag `azuredesk-vX.Y.Z` no
+commit correspondente (§3.2). Assim cada release nosso aponta para um par
+binário + fonte, e não só para um hash de imagem de terceiro.
 
 ### 12.3 Auto-update do servidor com rollback
 
@@ -483,3 +514,4 @@ proteção de branch. Registrado como risco em §10.
 | 2026-08-10 | **Reescrita por mudança de escopo.** Escopo reduzido a auto-registro + console + grupos, sem AD. Pro deixa de ser necessário → stack **100% gratuita**. Arquitetura Família A definida (hbbs/hbbr oficiais + console OSS de terceiros). Console escolhido: `lantongxue/rustdesk-api-server-pro`. 8 achados de código documentados (§6). |
 | 2026-08-20 | Projeto publicado em `PHRDevSYS/RustDesk-Personalite`. Reestruturado em `ambientes/`, `servidor/`, `agente/`, `release/`. Criada a esteira de três branches com promoção por fast-forward, manifesto de release e auto-update de servidor (systemd + rollback) e de endpoint (Tarefa Agendada + verificação de SHA256). Ver §12. |
 | 2026-08-20 | Levantado o **modelo de dados do console** (§6.2) a partir de `db.go` e `model/*.go`: `device`, `peer`/`address_book`/`tags`, `audit` e `file_transfer`. Confirmado que o log de conexão existe e é reportado pelo endpoint acessado, não pelo servidor. Drivers: SQLite e MySQL, sem PostgreSQL. Dois achados novos (9 e 10). |
+| 2026-08-20 | Console **fixado por digest** (`@sha256:cd35bd…`) e fonte **espelhada** em fork próprio, tagueada `azuredesk-v0.1.0`. Fecha o achado 8. Decidido **não** compilar imagem própria sem necessidade de personalização — o fork é seguro de fonte, não pipeline de build. Ver §3.2. |
