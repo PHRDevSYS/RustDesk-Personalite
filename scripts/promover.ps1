@@ -84,8 +84,11 @@ function Git-Ok {
     return $saida
 }
 
-if (-not $Para -and -not $Versao -and -not $VersaoAgente -and -not $ImagemConsole -and -not $ImagemServidor) {
-    Erro 'Nada a fazer. Use -Para, -Versao, -VersaoAgente, -ImagemConsole ou -ImagemServidor. Veja -? para exemplos.'
+$editaManifesto = $Versao -or $VersaoAgente -or $ImagemConsole -or $ImagemServidor -or
+                  $PSBoundParameters.ContainsKey('Notas')
+
+if (-not $Para -and -not $editaManifesto) {
+    Erro 'Nada a fazer. Use -Para, -Versao, -VersaoAgente, -ImagemConsole, -ImagemServidor ou -Notas. Veja -? para exemplos.'
 }
 
 # --------------------------------------------------------------- pré-condições
@@ -99,7 +102,7 @@ Git-Ok fetch --prune origin | Out-Null
 # ===========================================================================
 # PARTE 1 — editar o manifesto em main
 # ===========================================================================
-if ($Versao -or $VersaoAgente -or $ImagemConsole -or $ImagemServidor) {
+if ($editaManifesto) {
     if ($branchAtual -ne 'main') { Erro "O manifesto só é editado em main. Você está em '$branchAtual'." }
 
     $m = Get-Content $Manifesto -Raw | ConvertFrom-Json
