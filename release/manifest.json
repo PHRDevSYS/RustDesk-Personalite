@@ -1,14 +1,14 @@
 {
-  "versao": "0.1.0",
-  "gerado_em": "2026-08-20T00:00:00Z",
-  "servidor": {
-    "rustdesk_server_image": "rustdesk/rustdesk-server:1.1.16",
-    "console_image": "ghcr.io/lantongxue/rustdesk-api-server-pro:latest"
-  },
-  "agente": {
-    "versao": "1.4.9",
-    "url": "https://github.com/rustdesk/rustdesk/releases/download/1.4.9/rustdesk-1.4.9-x86_64.exe",
-    "sha256": ""
-  },
-  "notas": "Release inicial. agente.sha256 ainda vazio: enquanto estiver assim, o auto-update dos endpoints RECUSA instalar (falha fechada). Preencha com scripts/promover.ps1 -VersaoAgente 1.4.9, que baixa o instalador e calcula o hash."
+    "versao":  "0.1.0",
+    "gerado_em":  "2026-08-20T12:49:46Z",
+    "servidor":  {
+                     "rustdesk_server_image":  "rustdesk/rustdesk-server:1.1.16",
+                     "console_image":  "ghcr.io/lantongxue/rustdesk-api-server-pro:latest"
+                 },
+    "agente":  {
+                   "versao":  "1.4.9",
+                   "url":  "https://github.com/rustdesk/rustdesk/releases/download/1.4.9/rustdesk-1.4.9-x86_64.exe",
+                   "sha256":  "EAEDEB0088E687BF46F7C46A9C6EA5493CE51F3134DFD6ACBEDB47B5B9136274"
+               },
+    "notas":  "Release inicial. agente.sha256 ainda vazio: enquanto estiver assim, o auto-update dos endpoints RECUSA instalar (falha fechada). Preencha com scripts/promover.ps1 -VersaoAgente 1.4.9, que baixa o instalador e calcula o hash."
 }
