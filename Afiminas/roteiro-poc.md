@@ -160,7 +160,50 @@ entre eles e confirme que a organização persiste após `dc restart console`.
 
 ---
 
-## Teste 6 — Relay (fallback)
+## Teste 6 — Registro de acessos (audit)
+
+Confirma que o console grava o **log de conexão**. O contrato de API lista
+`/api/audit` como *opcional* ([`memoria.md`](memoria.md) §5.4); a leitura do
+código confirmou que este console implementa (§6.2), mas isso ainda não foi
+observado em execução.
+
+Depois de abrir e **fechar** uma conexão no Teste 5:
+
+```bash
+DB=ambientes/homologacao/data-console/server.db
+SQL="SELECT id, rustdesk_id, ip, type, created_at, closed_at FROM audit ORDER BY id DESC LIMIT 5;"
+
+sqlite3 "$DB" "$SQL"
+```
+
+Se o host não tiver `sqlite3` instalado, use um container descartável em vez de
+instalar no servidor:
+
+```bash
+docker run --rm -v "$PWD/ambientes/homologacao/data-console:/d" -w /d alpine \
+  sh -c "apk add -q sqlite && sqlite3 server.db '$SQL'"
+```
+
+**Critérios de aceite:**
+- Existe uma linha para a sessão do Teste 5, com o `rustdesk_id` do dispositivo
+  acessado e o `ip` de origem.
+- `type` = `0` (controle remoto).
+- `closed_at` é preenchido ao encerrar a sessão — se ficar nulo, o `action:"close"`
+  não chegou e a duração da sessão não é confiável.
+- A mesma informação aparece na tela de auditoria do console.
+
+Transferindo um arquivo durante a sessão, `file_transfer` também deve receber uma
+linha. O `uuid` dessa tabela vem errado por um defeito upstream
+([`memoria.md`](memoria.md) §6.1, achado 9) — ignore essa coluna.
+
+> Se este teste falhar, o acesso remoto continua funcionando, mas **não há
+> rastro de quem acessou o quê**. Para um provedor de suporte a farmácias isso é
+> requisito de prestação de contas, não item opcional — trate como bloqueante
+> para produção, ainda que não bloqueie o PoC.
+
+---
+
+## Teste 7 — Relay (fallback)
 
 Confirma que o `hbbr` funciona quando o P2P não é possível:
 
@@ -174,7 +217,7 @@ produção o P2P é o caminho desejado.
 
 ---
 
-## Teste 7 — Persistência
+## Teste 8 — Persistência
 
 ```bash
 dc down
@@ -187,7 +230,7 @@ AMBIENTE=homologacao ./servidor/scripts/healthcheck.sh
 
 ---
 
-## Teste 8 — Auto-update
+## Teste 9 — Auto-update
 
 Valida o mecanismo que leva uma nova versão até servidores e endpoints.
 
@@ -225,9 +268,10 @@ Get-ScheduledTask -TaskName 'AzureControlDesk - AutoUpdate' | Get-ScheduledTaskI
 | 3 | **Auto-registro** | ⬜ PASS / FAIL | |
 | 4 | **Grupos** | ⬜ PASS / FAIL | |
 | 5 | **Book + conexão** | ⬜ PASS / FAIL | |
-| 6 | Relay | ⬜ PASS / FAIL | |
-| 7 | Persistência | ⬜ PASS / FAIL | |
-| 8 | Auto-update + rollback | ⬜ PASS / FAIL | |
+| 6 | **Log de acessos (audit)** | ⬜ PASS / FAIL | |
+| 7 | Relay | ⬜ PASS / FAIL | |
+| 8 | Persistência | ⬜ PASS / FAIL | |
+| 9 | Auto-update + rollback | ⬜ PASS / FAIL | |
 
 Preencha e me devolva — os achados voltam para [`memoria.md`](memoria.md).
 
@@ -258,6 +302,11 @@ A Key não confere com `data-rustdesk/id_ed25519.pub`. Recopie — sem espaços 
 **Cliente na mesma LAN do servidor não conecta, mas de fora funciona**
 NAT loopback (hairpin NAT). Habilite no roteador ou aponte o domínio para o IP LAN via
 DNS interno. Ver documentação oficial de *NAT Loopback issues*.
+
+**Nenhuma linha em `audit` depois de uma conexão**
+O cliente só envia auditoria quando tem `API Server` configurado — o mesmo pré-requisito
+do auto-registro. Confirme com `dc logs console | grep -i audit`. Lembre que quem reporta
+é a **máquina acessada**, não a do técnico ([`memoria.md`](memoria.md) §6.2).
 
 **Auto-update do servidor sai com código 9**
 Rollback também falhou — o ambiente está quebrado e não se auto-recupera.

@@ -84,7 +84,7 @@ homologação. Fluxo completo, manifesto de release e mecânica do auto-update:
 │
 └── Afiminas/                 # o cliente
     ├── memoria.md            # documento vivo: escopo, decisões, riscos
-    └── roteiro-poc.md        # os 7 testes que validam a stack
+    └── roteiro-poc.md        # os 9 testes que validam a stack
 ```
 
 ## Começando

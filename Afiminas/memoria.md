@@ -216,7 +216,8 @@ e do fluxo detalhado em `src/hbbs_http/sync.rs`. **Base para avaliar um console 
 | `GET /api/device-group/accessible` | Grupos visíveis ao usuário |
 | `GET /api/ab/*` | Address book (o *book*) — 13 rotas para o conjunto completo |
 
-**Opcionais:** `/api/audit`, `/api/audit/{}`, `/api/record`, `/api/switch-grant`,
+**Opcionais:** `/api/audit`, `/api/audit/{}` (**confirmados implementados** no console
+escolhido — ver §6.2), `/api/record`, `/api/switch-grant`,
 `/api/devices/cli`, `/api/devices/deploy`, `/api/oidc/auth`, `/api/oidc/auth-query`, `/api/plugin-sign`.
 
 #### Fluxo exato do auto-registro (`sync.rs`)
@@ -269,8 +270,10 @@ Heartbeat a cada **15 s** (`TIME_HEARTBEAT`) quando não há conexões ativas.
 
 ## 6. Achados da leitura do código (`rustdesk-api-server-pro`)
 
+### 6.1 Configuração e empacotamento
+
 Derivados de `Dockerfile`, `docker/start.sh`, `backend/config/config.go` e `backend/server.yaml`.
-**Ainda não confirmados em execução** — são o primeiro item de validação do PoC.
+Achados 1 a 8 **ainda não confirmados em execução** — são o primeiro item de validação do PoC.
 
 | # | Achado | Impacto | Mitigação aplicada |
 |---|---|---|---|
@@ -282,6 +285,44 @@ Derivados de `Dockerfile`, `docker/start.sh`, `backend/config/config.go` e `back
 | 6 | Porta default do Go é `:8080`; do `server.yaml` versionado é `:12345` | Divergência conforme qual config é lida | Fixar `:21114` explicitamente |
 | 7 | `timeZone` default `Asia/Shanghai` | Timestamps errados nos registros | Fixar `America/Sao_Paulo` |
 | 8 | Repositório **sem releases tagueadas**; só imagem `:latest` | Sem previsibilidade de versão | Registrar o digest da imagem em uso (§9) |
+| 9 | `PostAuditFile` grava `Uuid: gjson.GetBytes(body, "type").String()` — lê o campo `type` e guarda na coluna `uuid` | Log de **transferência de arquivo** sai com UUID errado. Não afeta `audit` | Nenhuma. Defeito upstream; não usar `file_transfer.uuid` para correlacionar |
+| 10 | Tabela `audit` **sem retenção nem rotação** | Cresce indefinidamente; entra no dimensionamento do backup de `server.db` | Acompanhar o tamanho; purga manual se necessário |
+
+### 6.2 Modelo de dados — o que o banco armazena
+
+Derivado de `backend/db/db.go` e `backend/app/model/*.go` (leitura de 2026-08-20).
+**Responde à pergunta "é preciso um banco?": é, e ele já existe** — vem dentro do
+console, não há nada a acrescentar à stack.
+
+| Tabela | Origem do dado | Conteúdo |
+|---|---|---|
+| `device` | `POST /api/sysinfo` (auto-registro) + heartbeat | `rustdesk_id`, `hostname`, `username`, `uuid`, `os`, `cpu`, `memory`, `version`, `is_online`, `conns` |
+| `peer`, `address_book`, `tags` | console (UI) + presets do sysinfo | o *book*: `alias`, `tags`, `user_id`, `ab_id`, `platform` — é aqui que vive a hierarquia de §1.1.3 |
+| `audit` | `POST /api/audit/conn` | **log de conexão:** `conn_id`, `rustdesk_id`, `ip`, `session_id`, `peer`, `type`, `closed_at`, `created_at` |
+| `file_transfer` | `POST /api/audit/file` | caminho, nome, tamanho e direção de cada arquivo transferido (ver achado 9) |
+| `user`, `auth_token`, `system_settings`, `mail_*`, `verify_code` | console | usuários, sessões e configuração |
+
+`audit.type`: `0` = controle remoto · `1` = transferência de arquivo · `2` = túnel TCP.
+Um registro é criado com `action:"new"` (com o IP de origem) e recebe `closed_at` no `action:"close"`.
+
+**Drivers disponíveis:** `db.go` compila `modernc.org/sqlite` (Go puro, sem CGO) e
+`go-sql-driver/mysql`. **Não há PostgreSQL.** Trocar é só mudar `driver` e `dsn` no
+`server.yaml`, já parametrizado nos dois ambientes.
+
+SQLite atende o escopo: com um único console não há contenção de escrita. Só vale
+migrar para MySQL se houver mais de um console sobre o mesmo banco, ou se a `audit`
+crescer a ponto de degradar as consultas do painel.
+
+**Duas ressalvas sobre o log de acesso:**
+
+1. **Quem reporta é o endpoint acessado, não o servidor.** O `post_conn_audit` está em
+   `src/server/connection.rs` do RustDesk — quem envia é a máquina que está sendo
+   controlada. É melhor do que o técnico auto-reportar, mas continua sendo log de
+   aplicação: quem tem admin no endpoint pode suprimi-lo. Serve como registro
+   gerencial, **não como prova forense**.
+2. **Sem `API Server` configurado no cliente não há log nenhum** — pela mesma razão que
+   não haveria auto-registro. Endpoint instalado fora do `install-agent.ps1` fica
+   invisível nos dois sentidos.
 
 ---
 
@@ -305,7 +346,7 @@ Caminhos relativos a `ambientes/<ambiente>/` no host (`/opt/azuredesk` por padr�
 |---|---|
 | Chave privada do servidor | `data-rustdesk/id_ed25519` |
 | Chave pública | `data-rustdesk/id_ed25519.pub` |
-| Banco do console | `data-console/server.db` |
+| Banco do console | `data-console/server.db` — dispositivos, book, usuários **e o log de acessos** (§6.2) |
 | Configuração | `.env` e `config/server.yaml` — **fora do Git**, únicos arquivos não reconstituíveis a partir do repositório |
 | Certificados TLS | `/etc/letsencrypt/` (pós-PoC) |
 
@@ -441,3 +482,4 @@ proteção de branch. Registrado como risco em §10.
 | 2026-08-10 | Levantado o **contrato de API do cliente** direto do código-fonte (§5.4): 10 endpoints obrigatórios, fluxo exato do auto-registro, e 3 descobertas — sem validação de licença no cliente, Strategy implementável via resposta do heartbeat, e presets de grupo/book viajando no sysinfo. Console próprio avaliado como **viável**; recomendado fork em vez de greenfield. |
 | 2026-08-10 | **Reescrita por mudança de escopo.** Escopo reduzido a auto-registro + console + grupos, sem AD. Pro deixa de ser necessário → stack **100% gratuita**. Arquitetura Família A definida (hbbs/hbbr oficiais + console OSS de terceiros). Console escolhido: `lantongxue/rustdesk-api-server-pro`. 8 achados de código documentados (§6). |
 | 2026-08-20 | Projeto publicado em `PHRDevSYS/RustDesk-Personalite`. Reestruturado em `ambientes/`, `servidor/`, `agente/`, `release/`. Criada a esteira de três branches com promoção por fast-forward, manifesto de release e auto-update de servidor (systemd + rollback) e de endpoint (Tarefa Agendada + verificação de SHA256). Ver §12. |
+| 2026-08-20 | Levantado o **modelo de dados do console** (§6.2) a partir de `db.go` e `model/*.go`: `device`, `peer`/`address_book`/`tags`, `audit` e `file_transfer`. Confirmado que o log de conexão existe e é reportado pelo endpoint acessado, não pelo servidor. Drivers: SQLite e MySQL, sem PostgreSQL. Dois achados novos (9 e 10). |
