@@ -122,19 +122,41 @@ if ($Versao -or $VersaoAgente -or $ImagemConsole -or $ImagemServidor) {
     }
 
     if ($VersaoAgente) {
-        $url = "https://github.com/rustdesk/rustdesk/releases/download/$VersaoAgente/rustdesk-$VersaoAgente-x86_64.exe"
-        $tmp = Join-Path $env:TEMP "rustdesk-$VersaoAgente.exe"
+        $arquivo = "rustdesk-$VersaoAgente-x86_64.exe"
+        $url = "https://github.com/rustdesk/rustdesk/releases/download/$VersaoAgente/$arquivo"
         Passo "Agente: $($m.agente.versao) -> $VersaoAgente"
-        Aviso "Baixando $url para calcular o SHA256..."
+
+        # A API de releases do GitHub já publica o SHA256 do asset. Evita baixar
+        # ~24 MB só para calcular um hash, e vem pelo mesmo canal HTTPS de onde
+        # o binário viria. Releases antigas não têm o campo: aí cai no download.
+        $hash = $null
         try {
-            $pp = $ProgressPreference; $ProgressPreference = 'SilentlyContinue'
-            Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing -TimeoutSec 900
-            $ProgressPreference = $pp
+            $rel = Invoke-RestMethod -UseBasicParsing -TimeoutSec 60 `
+                -Uri "https://api.github.com/repos/rustdesk/rustdesk/releases/tags/$VersaoAgente" `
+                -Headers @{ 'Accept' = 'application/vnd.github+json'; 'User-Agent' = 'AzureControlDesk' }
+            $asset = $rel.assets | Where-Object { $_.name -eq $arquivo }
+            if (-not $asset) { Erro "A release $VersaoAgente não tem o asset $arquivo." }
+            if ($asset.digest -and $asset.digest -match '^sha256:(?<h>[0-9a-fA-F]{64})$') {
+                $hash = $Matches['h'].ToUpperInvariant()
+                Aviso "SHA256 obtido da API do GitHub (asset de $([math]::Round($asset.size/1MB,1)) MB)."
+            }
         } catch {
-            Erro "Download falhou. A versão $VersaoAgente existe nas releases do RustDesk? $_"
+            Erro "Não foi possível consultar a release $VersaoAgente: $_"
         }
-        $hash = (Get-FileHash -Path $tmp -Algorithm SHA256).Hash
-        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+
+        if (-not $hash) {
+            Aviso 'API sem digest para este asset. Baixando o instalador para calcular...'
+            $tmp = Join-Path $env:TEMP $arquivo
+            try {
+                $pp = $ProgressPreference; $ProgressPreference = 'SilentlyContinue'
+                Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing -TimeoutSec 900
+                $ProgressPreference = $pp
+            } catch {
+                Erro "Download falhou: $_"
+            }
+            $hash = (Get-FileHash -Path $tmp -Algorithm SHA256).Hash
+            Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        }
 
         $m.agente.versao = $VersaoAgente
         $m.agente.url = $url

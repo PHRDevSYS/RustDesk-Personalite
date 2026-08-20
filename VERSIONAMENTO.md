@@ -84,7 +84,8 @@ Tudo pelo `scripts/promover.ps1`, a partir de `main` com o working tree limpo.
 
 ```powershell
 # 1. Preparar o release em main.
-#    -VersaoAgente baixa o instalador oficial e grava o SHA256 no manifesto.
+#    -VersaoAgente busca o SHA256 do asset na API de releases do RustDesk
+#    (e só baixa o instalador se a API não trouxer o digest).
 .\scripts\promover.ps1 -Versao 1.0.0 -VersaoAgente 1.4.9
 
 # 2. Publicar em homologação. O servidor HML aplica em até 30 min (ou no boot);
