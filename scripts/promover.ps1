@@ -60,6 +60,7 @@ param(
     [string]$VersaoAgente,
     [string]$ImagemConsole,
     [string]$ImagemServidor,
+    [string]$Notas,
     [switch]$SemConfirmar
 )
 
@@ -164,16 +165,19 @@ if ($Versao -or $VersaoAgente -or $ImagemConsole -or $ImagemServidor) {
         Aviso "SHA256: $hash"
     }
 
+    if ($PSBoundParameters.ContainsKey('Notas')) { $m.notas = $Notas }
+
     $m.gerado_em = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 
     if ([string]::IsNullOrWhiteSpace($m.agente.sha256)) {
         Aviso 'agente.sha256 continua vazio: os endpoints vao RECUSAR a atualizacao (falha fechada).'
     }
 
-    # Sem BOM de propósito: o manifesto é lido por json.load() no servidor Linux,
-    # que quebra em UTF-8 com BOM. Set-Content -Encoding utf8 no PS 5.1 grava BOM.
-    [IO.File]::WriteAllText($Manifesto, ($m | ConvertTo-Json -Depth 10) + "`n",
-        (New-Object Text.UTF8Encoding($false)))
+    # Sem BOM e com LF: o manifesto é lido por json.load() no servidor Linux, que
+    # quebra em UTF-8 com BOM. Set-Content -Encoding utf8 no PS 5.1 grava BOM, e
+    # ConvertTo-Json emite CRLF.
+    $json = ($m | ConvertTo-Json -Depth 10).Replace("`r`n", "`n")
+    [IO.File]::WriteAllText($Manifesto, $json + "`n", (New-Object Text.UTF8Encoding($false)))
     Git-Ok add release/manifest.json | Out-Null
     Git-Ok commit -m "release: manifesto $($m.versao) (agente $($m.agente.versao))" | Out-Null
     Git-Ok push origin main | Out-Null
