@@ -1,48 +1,58 @@
 #!/usr/bin/env bash
 # ============================================================================
-# healthcheck.sh — PoC Acesso Remoto Afiminas
-# Retorno:  0 = OK   |   != 0 = ERROR (nº de falhas)
-# Uso:      ./scripts/healthcheck.sh [-v]
+# healthcheck.sh — AzureControlDesk
+# Valida a stack de um ambiente. Usado manualmente e pelo auto-update para
+# decidir entre confirmar a atualização ou fazer rollback.
+#
+# Uso:      AMBIENTE=producao ./servidor/scripts/healthcheck.sh [-v]
+# Retorno:  0 = PASS   |   != 0 = número de falhas
 # ============================================================================
 set -uo pipefail
 
-cd "$(dirname "$0")/.." || exit 99
+. "$(dirname "${BASH_SOURCE[0]}")/comum.sh"
 
 VERBOSE=0
 [ "${1:-}" = "-v" ] && VERBOSE=1
 
 FAILURES=0
-ok()   { printf '  [ OK ] %s\n' "$1"; }
-fail() { printf '  [FAIL] %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
-warn() { printf '  [WARN] %s\n' "$1"; }
+ok()    { printf '  [ OK ] %s\n' "$1"; }
+fail()  { printf '  [FAIL] %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
+warn()  { printf '  [WARN] %s\n' "$1"; }
 head_() { printf '\n== %s\n' "$1"; }
+
+printf 'AzureControlDesk — healthcheck (ambiente: %s)\n' "$AMBIENTE"
 
 # ---------------------------------------------------------------------------
 head_ "Containers"
-for c in hbbs hbbr rustdesk-console; do
-  status="$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null)" || status="ausente"
+for svc in hbbs hbbr console; do
+  id="$(cid "$svc")"
+  if [ -z "$id" ]; then
+    fail "$svc: container ausente"
+    continue
+  fi
+  status="$(docker inspect -f '{{.State.Status}}' "$id" 2>/dev/null || echo desconhecido)"
   if [ "$status" = "running" ]; then
-    restarts="$(docker inspect -f '{{.RestartCount}}' "$c" 2>/dev/null || echo 0)"
+    restarts="$(docker inspect -f '{{.RestartCount}}' "$id" 2>/dev/null || echo 0)"
     if [ "${restarts:-0}" -gt 5 ]; then
-      warn "$c running, mas com $restarts restarts (possível crash loop)"
+      warn "$svc running, mas com $restarts restarts (possível crash loop)"
     else
-      ok "$c running"
+      ok "$svc running"
     fi
   else
-    fail "$c: $status"
+    fail "$svc: $status"
   fi
 done
 
 # ---------------------------------------------------------------------------
 head_ "Chaves do servidor"
-if [ -f data-rustdesk/id_ed25519.pub ]; then
+if [ -f "$ENVDIR/data-rustdesk/id_ed25519.pub" ]; then
   ok "id_ed25519.pub presente"
-  [ "$VERBOSE" -eq 1 ] && printf '         Key: %s\n' "$(cat data-rustdesk/id_ed25519.pub)"
+  [ "$VERBOSE" -eq 1 ] && printf '         Key: %s\n' "$(cat "$ENVDIR/data-rustdesk/id_ed25519.pub")"
 else
   fail "data-rustdesk/id_ed25519.pub ausente — hbbs não inicializou"
 fi
-if [ -f data-rustdesk/id_ed25519 ]; then
-  perm="$(stat -c '%a' data-rustdesk/id_ed25519 2>/dev/null || echo '?')"
+if [ -f "$ENVDIR/data-rustdesk/id_ed25519" ]; then
+  perm="$(stat -c '%a' "$ENVDIR/data-rustdesk/id_ed25519" 2>/dev/null || echo '?')"
   [ "$perm" = "600" ] || warn "id_ed25519 com permissão $perm (esperado 600)"
   ok "id_ed25519 presente (ATIVO CRÍTICO — garantir backup)"
 else
@@ -59,7 +69,7 @@ for p in 21115 21116 21117 21114; do
 done
 if listening_udp 21116; then ok "UDP 21116"; else fail "UDP 21116 não está em escuta"; fi
 
-# Estas DEVEM estar fechadas no escopo enxuto (ver memoria.md §4)
+# Estas DEVEM estar fechadas (ver Afiminas/memoria.md §4).
 for p in 21118 21119; do
   if listening_tcp "$p"; then
     warn "TCP $p em escuta — deveria estar fechada (risco de spoofing de X-Real-IP)"
@@ -80,15 +90,31 @@ esac
 
 # ---------------------------------------------------------------------------
 head_ "Banco do console"
-if [ -f data-console/server.db ]; then
+if [ -f "$ENVDIR/data-console/server.db" ]; then
   ok "data-console/server.db presente (persistência funcionando)"
 else
   fail "data-console/server.db ausente — volume /app/data não persistiu (memoria.md §6, achado 3)"
 fi
 
 # ---------------------------------------------------------------------------
+head_ "Versão implantada"
+if [ -f "$MANIFESTO" ]; then
+  ver="$(manifesto_campo versao)"
+  aplicada="$(cat "$ENVDIR/.versao-aplicada" 2>/dev/null || echo '')"
+  if [ -z "$ver" ]; then
+    fail "release/manifest.json ilegível ou sem campo 'versao'"
+  elif [ -n "$aplicada" ] && [ "$aplicada" != "$ver" ]; then
+    warn "manifesto em $ver, mas a última versão confirmada pelo auto-update foi $aplicada"
+  else
+    ok "release $ver"
+  fi
+else
+  warn "release/manifest.json ausente — auto-update não tem referência de versão"
+fi
+
+# ---------------------------------------------------------------------------
 head_ "Recursos do host"
-disk="$(df -P . | awk 'NR==2{print $5}' | tr -d '%')"
+disk="$(df -P "$ENVDIR" | awk 'NR==2{print $5}' | tr -d '%')"
 if [ "${disk:-0}" -ge 90 ]; then fail "disco em ${disk}%"; else ok "disco em ${disk}%"; fi
 
 if command -v free >/dev/null 2>&1; then

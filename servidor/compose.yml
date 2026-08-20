@@ -1,9 +1,18 @@
-# PoC — Acesso Remoto Corporativo Afiminas
-# Arquitetura Família A: hbbs/hbbr OFICIAIS RustDesk + console OSS de terceiros.
+# ============================================================================
+# AzureControlDesk — stack do servidor
 #
+# Arquitetura Família A: hbbs/hbbr OFICIAIS RustDesk + console OSS de terceiros.
 # Requer Linux (network_mode: host não funciona em Docker Desktop Windows/macOS).
-# Uso: cp .env.example .env && cp config/server.yaml.example config/server.yaml
-#      (editar ambos) && docker compose up -d
+#
+# Este arquivo é ÚNICO para todos os ambientes. O que muda por ambiente é o
+# diretório passado em --project-directory, onde vivem .env, config/ e os dados:
+#
+#   docker compose --project-directory ambientes/producao \
+#                  --env-file        ambientes/producao/.env \
+#                  -f servidor/compose.yml up -d
+#
+# Use servidor/scripts/compose.sh, que encapsula essa invocação.
+# ============================================================================
 
 services:
 
@@ -12,8 +21,7 @@ services:
   # Gera id_ed25519 / id_ed25519.pub no primeiro boot em ./data-rustdesk
   # --------------------------------------------------------------------------
   hbbs:
-    container_name: hbbs
-    image: rustdesk/rustdesk-server:${RUSTDESK_SERVER_VERSION:-latest}
+    image: ${RUSTDESK_SERVER_IMAGE:-rustdesk/rustdesk-server:1.1.16}
     command: hbbs
     volumes:
       - ./data-rustdesk:/root
@@ -28,8 +36,7 @@ services:
   # hbbr — Relay Server (fallback quando P2P falha)  (RustDesk oficial)
   # --------------------------------------------------------------------------
   hbbr:
-    container_name: hbbr
-    image: rustdesk/rustdesk-server:${RUSTDESK_SERVER_VERSION:-latest}
+    image: ${RUSTDESK_SERVER_IMAGE:-rustdesk/rustdesk-server:1.1.16}
     command: hbbr
     volumes:
       - ./data-rustdesk:/root
@@ -42,7 +49,8 @@ services:
   # console — API Server + Web UI (terceiro, AGPL-3.0)
   # É quem recebe heartbeat/sysinfo dos clientes => AUTO-REGISTRO dos dispositivos.
   #
-  # ATENÇÃO aos 3 desvios em relação ao compose oficial do projeto (ver memoria.md §6):
+  # ATENÇÃO aos 3 desvios em relação ao compose oficial do projeto (ver
+  # Afiminas/memoria.md §6):
   #   1. Monta ./data-console:/app/data  -> o compose oficial NÃO monta, e o SQLite
   #      viveria só dentro do container (perda de dados ao recriar).
   #   2. Monta server.yaml em /app/data/server.yaml (working dir real, conforme
@@ -52,8 +60,7 @@ services:
   #   3. staticdir absoluto em config/server.yaml, senão a UI web quebra.
   # --------------------------------------------------------------------------
   console:
-    container_name: rustdesk-console
-    image: ${CONSOLE_IMAGE:-ghcr.io/lantongxue/rustdesk-api-server-pro:latest}
+    image: ${CONSOLE_IMAGE:?defina CONSOLE_IMAGE no .env do ambiente}
     environment:
       # Só têm efeito no PRIMEIRO boot (protegido por /app/data/.init.lock).
       - ADMIN_USER=${CONSOLE_ADMIN_USER:?defina CONSOLE_ADMIN_USER no .env}

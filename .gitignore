@@ -2,7 +2,7 @@
 .env
 *.env
 !.env.example
-config/server.yaml
+server.yaml
 id_ed25519
 id_ed25519.pub
 *.key
@@ -14,6 +14,9 @@ certificates/
 # ---- Dados persistidos (chaves do hbbs e banco do console) ---------------
 data-rustdesk/
 data-console/
+
+# ---- Estado local do auto-update (por ambiente, por host) ----------------
+.versao-aplicada
 
 # ---- Backups e logs ------------------------------------------------------
 backups/

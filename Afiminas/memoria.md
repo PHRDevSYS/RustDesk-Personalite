@@ -3,9 +3,10 @@
 > Documento vivo do projeto. Consolida escopo, arquitetura e fatos técnicos validados
 > na documentação oficial do RustDesk e na leitura do código-fonte dos componentes.
 >
-> **Última atualização:** 2026-08-10
-> **Status:** Fase 1 — PoC em montagem
+> **Última atualização:** 2026-08-20
+> **Status:** Fase 1 — PoC em montagem, esteira de entrega pronta (§12)
 > **Escopo:** ENXUTO (ver §1.2 — redefinido em 2026-08-10)
+> **Repositório:** https://github.com/PHRDevSYS/RustDesk-Personalite
 
 ---
 
@@ -298,13 +299,19 @@ Derivados de `Dockerfile`, `docker/start.sh`, `backend/config/config.go` e `back
 
 ## 8. Backup (simplificado)
 
+Caminhos relativos a `ambientes/<ambiente>/` no host (`/opt/azuredesk` por padrão).
+
 | Item | Caminho |
 |---|---|
 | Chave privada do servidor | `data-rustdesk/id_ed25519` |
 | Chave pública | `data-rustdesk/id_ed25519.pub` |
 | Banco do console | `data-console/server.db` |
-| Configuração | `config/server.yaml`, `compose.yml`, `.env` |
+| Configuração | `.env` e `config/server.yaml` — **fora do Git**, únicos arquivos não reconstituíveis a partir do repositório |
 | Certificados TLS | `/etc/letsencrypt/` (pós-PoC) |
+
+> O `compose.yml` e os scripts **não** precisam de backup: vivem no repositório e
+> o auto-update os restaura com um `git reset --hard`. O que não está versionado
+> é exatamente o que o backup precisa cobrir.
 
 Ciclo obrigatório: **backup → restore → validação**. "Backup criado" não é suficiente.
 
@@ -334,7 +341,10 @@ Verificadas em **2026-08-10**:
 | Projeto de terceiros abandonado | Sem correções | 3 alternativas mapeadas (§3.1); migração só troca o console, não o servidor |
 | Perda de `id_ed25519` | Reconfigurar **todos** os clientes | Backup + teste de restore |
 | Sem suporte comercial | Incidente sem SLA | Aceito conscientemente com o escopo gratuito |
-| Imagem só em `:latest` | Upgrade não previsível | Registrar digest e fixar |
+| Imagem só em `:latest` | Upgrade não previsível | Digest fixado no manifesto de release (§12.2) |
+| **Comprometimento da conta com push em `producao`** | **Execução como SYSTEM em toda a frota e root nos servidores** | 2FA obrigatório, proteção de branch, promoção só por fast-forward (§12.5) |
+| Auto-update aplica versão quebrada no servidor | Ambiente fora do ar sem ninguém por perto | Rollback automático via healthcheck (§12.3) |
+| Auto-update do endpoint baixa binário adulterado | Código arbitrário como SYSTEM no cliente | SHA256 verificado contra o manifesto, falha fechada (§12.4) |
 
 ---
 
@@ -349,7 +359,65 @@ Verificadas em **2026-08-10**:
 
 ---
 
-## 12. Referências
+## 12. Ambientes, versionamento e auto-update
+
+Detalhamento operacional em [`../VERSIONAMENTO.md`](../VERSIONAMENTO.md).
+Aqui ficam apenas as decisões e o porquê delas.
+
+### 12.1 Três branches, promoção por fast-forward
+
+`main` → `homologacao` → `producao`. Nenhum arquivo é editado na branch de
+destino, então as três têm conteúdo idêntico e a promoção nunca dá conflito.
+
+A razão de ser fast-forward e não merge comum: `producao` só avança a partir de
+`homologacao`, o que torna **estruturalmente impossível** publicar em produção
+algo que não passou por homologação. Não é convenção que alguém pode esquecer —
+o comando falha.
+
+Descartado: um campo `canal` no manifesto identificando o ambiente. Obrigaria a
+editar o arquivo em cada branch, e toda promoção passaria a conflitar naquela
+linha. A branch já identifica o ambiente.
+
+### 12.2 Manifesto como contrato
+
+`release/manifest.json` é a única fonte de verdade sobre "qual versão é a
+vigente". Servidor e endpoint leem o mesmo arquivo, cada um da branch do seu
+ambiente. Resolve a pendência de §9 (evitar `latest`): o digest do console fica
+no manifesto, não espalhado em `.env` de cada host.
+
+### 12.3 Auto-update do servidor com rollback
+
+O ponto não negociável é o rollback: se o healthcheck falhar após aplicar a nova
+versão, o script volta ao commit e às imagens anteriores e revalida. Sem isso, o
+auto-update seria uma forma automatizada de derrubar produção fora do horário.
+
+Três desfechos, distinguíveis pelo código de saída: aplicado (0), revertido e
+ambiente íntegro (1), rollback também falhou e exige intervenção (9).
+
+### 12.4 Auto-update do endpoint com verificação de hash
+
+O instalador vem das releases públicas do RustDesk — código de terceiros baixado
+por um processo SYSTEM. O `agente.sha256` do manifesto é verificado antes de
+executar, e **manifesto sem hash faz o script recusar a instalação**. Falha
+fechada: na dúvida, não instala.
+
+O script vive em `%ProgramFiles%\AzureControlDesk` e não em `%ProgramData%`:
+script executado como SYSTEM a partir de diretório gravável por usuário comum é
+escalonamento de privilégio.
+
+### 12.5 O risco que o desenho cria
+
+**Push na branch `producao` = execução de código como SYSTEM em toda a frota e
+como root nos servidores.** Isso é o mecanismo, não um efeito colateral.
+
+O SHA256 protege contra o binário mudar debaixo dos pés; **não** protege contra
+quem tem acesso de escrita ao repositório, porque essa pessoa também edita o
+manifesto. Contra esse cenário o controle real é o acesso à conta: 2FA e
+proteção de branch. Registrado como risco em §10.
+
+---
+
+## 13. Referências
 
 **Documentação oficial RustDesk**
 - Self-host / portas — https://rustdesk.com/docs/en/self-host/
@@ -365,10 +433,11 @@ Verificadas em **2026-08-10**:
 
 ---
 
-## 13. Histórico
+## 14. Histórico
 
 | Data | Alteração |
 |---|---|
 | 2026-08-10 | Criação. PDF (39 seções) + documentação oficial RustDesk. Conclusão inicial: **Pro obrigatório**. |
 | 2026-08-10 | Levantado o **contrato de API do cliente** direto do código-fonte (§5.4): 10 endpoints obrigatórios, fluxo exato do auto-registro, e 3 descobertas — sem validação de licença no cliente, Strategy implementável via resposta do heartbeat, e presets de grupo/book viajando no sysinfo. Console próprio avaliado como **viável**; recomendado fork em vez de greenfield. |
 | 2026-08-10 | **Reescrita por mudança de escopo.** Escopo reduzido a auto-registro + console + grupos, sem AD. Pro deixa de ser necessário → stack **100% gratuita**. Arquitetura Família A definida (hbbs/hbbr oficiais + console OSS de terceiros). Console escolhido: `lantongxue/rustdesk-api-server-pro`. 8 achados de código documentados (§6). |
+| 2026-08-20 | Projeto publicado em `PHRDevSYS/RustDesk-Personalite`. Reestruturado em `ambientes/`, `servidor/`, `agente/`, `release/`. Criada a esteira de três branches com promoção por fast-forward, manifesto de release e auto-update de servidor (systemd + rollback) e de endpoint (Tarefa Agendada + verificação de SHA256). Ver §12. |

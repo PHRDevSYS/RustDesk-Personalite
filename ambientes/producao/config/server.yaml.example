@@ -1,7 +1,9 @@
 # ============================================================================
-# Config do console (rustdesk-api-server-pro)
-# Copie para config/server.yaml e ajuste. Chaves derivadas de
+# Config do console (rustdesk-api-server-pro) — ambiente PRODUÇÃO
+# Copie para ambientes/producao/config/server.yaml e ajuste. Chaves derivadas de
 # backend/config/config.go — não inventar chaves fora desta lista.
+# O signKey de produção DEVE ser diferente do de homologação: se forem iguais,
+# um token emitido em homologação vale em produção.
 # ============================================================================
 
 # SECRET — chave de assinatura dos tokens.
@@ -9,7 +11,7 @@
 #   openssl rand -base64 32
 signKey: "TROQUE_ESTE_VALOR_ANTES_DE_SUBIR"
 
-debugMode: false
+debugMode: false   # nunca true em produção
 
 db:
   driver: "sqlite"
@@ -19,7 +21,7 @@ db:
   showSql: false
 
 httpConfig:
-  printRequestLog: true
+  printRequestLog: false   # true vaza detalhes de requisição no log
   # ABSOLUTO de propósito. O default do Go é "dist" (relativo), que com working
   # dir /app/data resolveria para /app/data/dist — inexistente. Ver memoria.md §6.
   staticdir: "/app/dist"

@@ -1,0 +1,35 @@
+# ============================================================================
+# Aplica a versão publicada na branch do ambiente. Dispara no boot e a cada
+# ciclo do timer irmão (azuredesk-autoupdate.timer).
+#
+# Instalação (no servidor, como root):
+#   git clone https://github.com/PHRDevSYS/RustDesk-Personalite.git /opt/azuredesk
+#   cd /opt/azuredesk && git checkout producao
+#   # provisionar ambientes/producao/.env e config/server.yaml
+#   sed -i 's/^Environment=AMBIENTE=.*/Environment=AMBIENTE=producao/' \
+#       servidor/systemd/azuredesk-autoupdate.service
+#   cp servidor/systemd/azuredesk-autoupdate.* /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now azuredesk-autoupdate.service azuredesk-autoupdate.timer
+# ============================================================================
+[Unit]
+Description=AzureControlDesk - auto-update do servidor
+Documentation=https://github.com/PHRDevSYS/RustDesk-Personalite
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+Environment=AMBIENTE=homologacao
+WorkingDirectory=/opt/azuredesk
+ExecStart=/opt/azuredesk/servidor/scripts/autoupdate-servidor.sh
+# O rollback interno já trata a falha; um exit != 0 significa que o ambiente
+# ficou na versão anterior (1) ou precisa de intervenção (9).
+SuccessExitStatus=0
+TimeoutStartSec=900
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

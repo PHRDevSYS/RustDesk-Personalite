@@ -1,0 +1,18 @@
+# ============================================================================
+# Verificação periódica, complementar ao disparo no boot.
+# Servidor que fica meses ligado nunca "inicia" — sem o timer, o auto-update
+# no boot só valeria para reinicializações.
+# ============================================================================
+[Unit]
+Description=AzureControlDesk - verificacao periodica de atualizacao
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=30min
+# Espalha as verificações para não sincronizar todos os servidores no mesmo instante.
+RandomizedDelaySec=5min
+Persistent=true
+Unit=azuredesk-autoupdate.service
+
+[Install]
+WantedBy=timers.target

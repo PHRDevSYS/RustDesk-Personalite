@@ -1,0 +1,43 @@
+# ============================================================================
+# Config do console (rustdesk-api-server-pro) — ambiente HOMOLOGAÇÃO
+# Copie para ambientes/homologacao/config/server.yaml e ajuste. Chaves derivadas de
+# backend/config/config.go — não inventar chaves fora desta lista.
+# O signKey de homologação DEVE ser diferente do de produção.
+# ============================================================================
+
+# SECRET — chave de assinatura dos tokens.
+# O valor versionado no projeto upstream é PÚBLICO E CONHECIDO. Gere o seu:
+#   openssl rand -base64 32
+signKey: "TROQUE_ESTE_VALOR_ANTES_DE_SUBIR"
+
+debugMode: false
+
+db:
+  driver: "sqlite"
+  # Resolve relativo ao working dir do container (/app/data) => /app/data/server.db
+  dsn: "./server.db"
+  timeZone: "America/Sao_Paulo"   # upstream vem com Asia/Shanghai
+  showSql: false
+
+httpConfig:
+  printRequestLog: true
+  # ABSOLUTO de propósito. O default do Go é "dist" (relativo), que com working
+  # dir /app/data resolveria para /app/data/dist — inexistente. Ver memoria.md §6.
+  staticdir: "/app/dist"
+  # 21114 é livre no RustDesk OSS (é porta exclusiva do Pro). Usar aqui mantém
+  # a convenção e simplifica o proxy 443 -> 21114.
+  port: ":21114"
+
+# Não usado no escopo enxuto (sem e-mail/2FA). Mantido inerte para não quebrar o parse.
+smtpConfig:
+  host: "127.0.0.1"
+  port: 1025
+  username: ""
+  password: ""
+  encryption: "none"    # none | ssl/tls | starttls
+  from: ""
+
+jobsConfig:
+  deviceCheckJob:
+    # Segundos sem heartbeat até marcar o dispositivo como offline.
+    duration: 30

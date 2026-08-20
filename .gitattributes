@@ -1,9 +1,12 @@
 * text=auto
 
 # Scripts que rodam no host Linux — LF obrigatório (CRLF quebra o shebang).
-*.sh   text eol=lf
-*.yml  text eol=lf
-*.yaml text eol=lf
+*.sh      text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.json    text eol=lf
+*.service text eol=lf
+*.timer   text eol=lf
 
 # Scripts executados no Windows.
 *.ps1  text eol=crlf

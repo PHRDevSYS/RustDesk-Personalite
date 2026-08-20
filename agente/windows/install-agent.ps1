@@ -23,16 +23,25 @@
     Senha permanente de acesso não supervisionado. Se omitida, gera aleatória de 16 chars.
     NUNCA fixar uma senha compartilhada entre dispositivos.
 
+.PARAMETER Ambiente
+    homologacao | producao. Define de qual branch este endpoint recebe
+    atualizações automáticas. Padrão: homologacao (errar para o lado seguro).
+
+.PARAMETER SemAutoUpdate
+    Não registra a Tarefa Agendada de auto-update. O endpoint fica congelado
+    na versão instalada agora e só muda com intervenção manual.
+
 .PARAMETER LogPath
     Arquivo de log. Padrão: $env:ProgramData\Afiminas\deploy-rustdesk.log
 
 .EXAMPLE
-    .\install-agent.ps1 -ConfigString "9WGJ...=="
+    .\install-agent.ps1 -ConfigString "9WGJ...==" -Ambiente producao
 
 .NOTES
     Executar como Administrador. Códigos de saída:
       0 = sucesso   1 = sem privilégio   2 = download falhou
       3 = instalação falhou   4 = serviço não subiu   5 = configuração falhou
+      6 = auto-update não pôde ser registrado
 #>
 
 [CmdletBinding()]
@@ -45,12 +54,18 @@ param(
 
     [string]$Password,
 
+    [ValidateSet('homologacao', 'producao')]
+    [string]$Ambiente = 'homologacao',
+
+    [switch]$SemAutoUpdate,
+
     [string]$LogPath = "$env:ProgramData\Afiminas\deploy-rustdesk.log"
 )
 
 $ErrorActionPreference = 'Stop'
 $InstallDir = "$env:ProgramFiles\RustDesk"
 $ServiceName = 'RustDesk'
+$EstadoDir = "$env:ProgramData\Afiminas"
 
 # --------------------------------------------------------------------------- log
 $logDir = Split-Path -Parent $LogPath
@@ -178,6 +193,44 @@ try {
     Exit-With 5 "Falha ao aplicar --password: $_"
 }
 
+# --------------------------------------------------------- estado para o updater
+# A config string é guardada para que o auto-update possa reaplicá-la depois de
+# uma atualização, corrigindo eventual perda de configuração. Ela contém apenas
+# endereços e a chave PÚBLICA do servidor — não a privada. Ainda assim, o
+# diretório recebe ACL restrita: qualquer coisa lida por um processo SYSTEM não
+# pode ser gravável por usuário comum.
+Write-Log "Registrando estado local do agente (ambiente: $Ambiente)."
+try {
+    $acl = Get-Acl $EstadoDir
+    $acl.SetAccessRuleProtection($true, $false)   # remove herança
+    $acl.Access | ForEach-Object { [void]$acl.RemoveAccessRule($_) }
+    foreach ($conta in 'NT AUTHORITY\SYSTEM', 'BUILTIN\Administrators') {
+        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+            $conta, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+    }
+    Set-Acl -Path $EstadoDir -AclObject $acl
+} catch {
+    Write-Log "Não foi possível endurecer a ACL de ${EstadoDir}: $_" 'WARN'
+}
+
+Set-Content -Path "$EstadoDir\ambiente.txt"      -Value $Ambiente     -Encoding ascii -NoNewline
+Set-Content -Path "$EstadoDir\config-string.txt" -Value $ConfigString -Encoding ascii -NoNewline
+
+# ------------------------------------------------------------------ auto-update
+if ($SemAutoUpdate) {
+    Write-Log 'Auto-update NÃO registrado (-SemAutoUpdate). Endpoint congelado nesta versão.' 'WARN'
+} else {
+    $updater = Join-Path $PSScriptRoot 'autoupdate-agent.ps1'
+    if (-not (Test-Path $updater)) {
+        Exit-With 6 "autoupdate-agent.ps1 não encontrado em $PSScriptRoot — copie a pasta agente\windows inteira."
+    }
+    try {
+        & $updater -Registrar -Ambiente $Ambiente | ForEach-Object { Write-Log $_ }
+    } catch {
+        Exit-With 6 "Falha ao registrar o auto-update: $_"
+    }
+}
+
 # ------------------------------------------------------------------- coleta do ID
 $deviceId = $null
 $deadline = (Get-Date).AddSeconds(60)
@@ -199,6 +252,7 @@ Write-Host '======================================================='
 Write-Host " Dispositivo : $env:COMPUTERNAME"
 Write-Host " RustDesk ID : $deviceId"
 Write-Host " Senha       : $Password"
+Write-Host " Ambiente    : $Ambiente"
 Write-Host '======================================================='
 Write-Host ' Recolha estes dados por canal seguro e apague desta tela.'
 Write-Host " A senha NAO foi gravada em $LogPath."
