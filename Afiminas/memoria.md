@@ -388,15 +388,16 @@ Ciclo obrigatório: **backup → restore → validação**. "Backup criado" não
 
 ## 9. Versões
 
-Verificadas em **2026-08-10**:
+Verificadas em **2026-08-10**; SO e hipervisor definidos em **2026-08-20** (§11.1):
 
 | Componente | Versão | Adotada no projeto |
 |---|---|---|
 | RustDesk Client | 1.4.9 (2026-07-06) | ⬜ a fixar |
 | rustdesk-server (OSS) | 1.1.16 (2026-07-20) | ⬜ a fixar |
 | `rustdesk-api-server-pro` | sem release tagueada — só `:latest` | ✅ `@sha256:cd35bddb8bd8…` (§3.2) |
-| Docker / Compose | — | ⬜ |
-| SO do servidor | — | ⬜ |
+| Docker / Compose | — | ⬜ a preencher na instalação (`docker compose version`) |
+| SO do servidor | Debian 13 (trixie), instalação mínima | ✅ definido (§11.1) |
+| Hipervisor | Proxmox VE 9.x | ✅ definido (§11.1) |
 
 **Regra:** evitar `latest` em produção. Fixar tags/digests no `.env` após o PoC validar.
 
