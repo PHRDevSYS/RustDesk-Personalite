@@ -34,7 +34,7 @@ reduzido pelo solicitante para o descrito em §1.1, o que **elimina a obrigatori
 | Auto-registro de dispositivos | ✅ Mantido — requisito central |
 | HTTPS / TLS no console | ✅ Mantido (etapa pós-PoC) |
 | Backup e restore | ✅ Mantido (simplificado) |
-| Branding / cliente próprio ("AzureDesk") | 🟡 Adiado — etapa de build separada, não bloqueia |
+| Branding / cliente próprio ("AzureDesk") | 🟡 Adiado — **são dois brandings com custos incomparáveis**, ver §11.6 |
 | OIDC / LDAP / Active Directory | ❌ **Removido** — explicitamente dispensado |
 | 2FA corporativo, Admin Role, Control Role | ❌ Removido |
 | Strategy (push de políticas em massa) | ❌ Removido |
@@ -314,6 +314,7 @@ Achados 1 a 8 **ainda não confirmados em execução** — são o primeiro item 
 | 8 | Repositório **sem releases tagueadas**; só imagem `:latest` | Sem previsibilidade de versão | ✅ Digest fixado no manifesto + fonte espelhada em fork (§3.2) |
 | 9 | `PostAuditFile` grava `Uuid: gjson.GetBytes(body, "type").String()` — lê o campo `type` e guarda na coluna `uuid` | Log de **transferência de arquivo** sai com UUID errado. Não afeta `audit` | Nenhuma. Defeito upstream; não usar `file_transfer.uuid` para correlacionar |
 | 10 | Tabela `audit` **sem retenção nem rotação** | Cresce indefinidamente; entra no dimensionamento do backup de `server.db` | Acompanhar o tamanho; purga manual se necessário |
+| 11 | Existe a tabela `system_settings` (`key`/`value`), mas **nenhum controller admin a expõe** — `route.go` registra só `Auth`, `Index`, `Dashboard`, `Users`, `Sessions`, `Audit`, `MailTemplate`, `MailLogs` e `Devices` | **Não há painel de configuração.** A tabela é esqueleto não usado: encontrá-la no banco não significa que a funcionalidade exista | Nenhuma. Toda parametrização do console é build-time (§11.6) |
 
 ### 6.2 Modelo de dados — o que o banco armazena
 
@@ -423,7 +424,37 @@ Verificadas em **2026-08-10**:
 3. Quantidade estimada de dispositivos/clientes.
 4. Hierarquia de grupos desejada (por cliente? por região? por tipo?).
 5. Destino do backup externo.
-6. Branding "AzureDesk" — confirmar se entra e quando.
+6. **Branding — são dois, com custos incomparáveis.** Ver §11.6 abaixo.
+
+### 11.6 Os dois brandings
+
+Tratar como um item só leva a subestimar o segundo. São produtos diferentes,
+para públicos diferentes, com custos que diferem em ordem de grandeza.
+
+| | **A — Console web** | **B — Cliente RustDesk ("AzureDesk")** |
+|---|---|---|
+| Quem vê | só os técnicos da Afiminas, internamente | **o cliente da farmácia**, na tela dele |
+| O que é | frontend Vue 3 ([soybean-admin](https://github.com/soybeanjs/soybean-admin)) servido pelo console | o `.exe` instalado no endpoint |
+| Como se muda | `soybean-admin/.env` (`VITE_APP_TITLE`, `VITE_APP_DESC`), `src/assets/svg-icon/logo.svg`, `logo-fill.svg`, `imgs/logo.png`, `public/favicon.svg` | fork do `rustdesk/rustdesk` (Rust) e build por plataforma |
+| Esforço | rebuild do frontend + imagem própria a partir do fork (§3.2) | fork em Rust, pipeline de build multiplataforma, **certificado de assinatura de código** |
+| Se não assinar | — | SmartScreen bloqueia a instalação na máquina do cliente |
+| Custo recorrente | manter a imagem própria em dia com o upstream | manter o fork em dia com o RustDesk, que libera versões com frequência |
+| Bloqueia o PoC? | não | não |
+
+**Por que A não é configurável por tela:** não existe painel de configuração no
+console (achado 11). `VITE_APP_TITLE` é substituído **dentro dos bundles JS
+compilados**, cujos nomes têm hash — não dá para trocar montando arquivo por
+cima nem com `sub_filter` no Nginx sem quebrar na próxima versão. O único
+caminho honesto é recompilar o frontend.
+
+**Estado atual:** nenhum dos dois foi feito. O fork do console (§3.2) já existe e
+tornaria **A** viável sem nova decisão de arquitetura — mas foi criado como
+seguro de código-fonte, não para isso, e compilar imagem própria segue
+deliberadamente fora de escopo enquanto não houver necessidade.
+
+**A pergunta que decide:** se o objetivo é o cliente da farmácia enxergar a marca
+Afiminas, **A não resolve** — ele nunca vê o console. Só **B** resolve, e é o caro.
+Se o objetivo é apresentação interna, **A** basta e é barato.
 
 ---
 
@@ -515,3 +546,4 @@ proteção de branch. Registrado como risco em §10.
 | 2026-08-20 | Projeto publicado em `PHRDevSYS/RustDesk-Personalite`. Reestruturado em `ambientes/`, `servidor/`, `agente/`, `release/`. Criada a esteira de três branches com promoção por fast-forward, manifesto de release e auto-update de servidor (systemd + rollback) e de endpoint (Tarefa Agendada + verificação de SHA256). Ver §12. |
 | 2026-08-20 | Levantado o **modelo de dados do console** (§6.2) a partir de `db.go` e `model/*.go`: `device`, `peer`/`address_book`/`tags`, `audit` e `file_transfer`. Confirmado que o log de conexão existe e é reportado pelo endpoint acessado, não pelo servidor. Drivers: SQLite e MySQL, sem PostgreSQL. Dois achados novos (9 e 10). |
 | 2026-08-20 | Console **fixado por digest** (`@sha256:cd35bd…`) e fonte **espelhada** em fork próprio, tagueada `azuredesk-v0.1.0`. Fecha o achado 8. Decidido **não** compilar imagem própria sem necessidade de personalização — o fork é seguro de fonte, não pipeline de build. Ver §3.2. |
+| 2026-08-20 | Registrado o achado 11 (não há painel de configuração no console: `system_settings` existe mas nenhuma rota a expõe) e detalhada a pendência §11.6, **separando os dois brandings** — console web (barato, rebuild do frontend) e cliente RustDesk (caro, fork em Rust + certificado de assinatura). Só o segundo é visível ao cliente da farmácia. |
