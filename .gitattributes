@@ -1,0 +1,12 @@
+* text=auto
+
+# Scripts que rodam no host Linux — LF obrigatório (CRLF quebra o shebang).
+*.sh   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+
+# Scripts executados no Windows.
+*.ps1  text eol=crlf
+
+# Binários.
+*.pdf  binary

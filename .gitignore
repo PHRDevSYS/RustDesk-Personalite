@@ -1,0 +1,32 @@
+# ---- Secrets -------------------------------------------------------------
+.env
+*.env
+!.env.example
+config/server.yaml
+id_ed25519
+id_ed25519.pub
+*.key
+*.pem
+*.crt
+secrets/
+certificates/
+
+# ---- Dados persistidos (chaves do hbbs e banco do console) ---------------
+data-rustdesk/
+data-console/
+
+# ---- Backups e logs ------------------------------------------------------
+backups/
+logs/
+*.log
+
+# ---- Documentos internos (não publicados) --------------------------------
+# Especificação corporativa da Afiminas; o conteúdo relevante está
+# consolidado em Afiminas/memoria.md.
+*.pdf
+
+# ---- SO / editor ---------------------------------------------------------
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/

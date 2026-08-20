@@ -1,0 +1,67 @@
+# PoC — Acesso Remoto Corporativo Afiminas
+# Arquitetura Família A: hbbs/hbbr OFICIAIS RustDesk + console OSS de terceiros.
+#
+# Requer Linux (network_mode: host não funciona em Docker Desktop Windows/macOS).
+# Uso: cp .env.example .env && cp config/server.yaml.example config/server.yaml
+#      (editar ambos) && docker compose up -d
+
+services:
+
+  # --------------------------------------------------------------------------
+  # hbbs — ID Server / Rendezvous / signaling  (RustDesk oficial, AGPL-3.0)
+  # Gera id_ed25519 / id_ed25519.pub no primeiro boot em ./data-rustdesk
+  # --------------------------------------------------------------------------
+  hbbs:
+    container_name: hbbs
+    image: rustdesk/rustdesk-server:${RUSTDESK_SERVER_VERSION:-latest}
+    command: hbbs
+    volumes:
+      - ./data-rustdesk:/root
+    network_mode: "host"
+    environment:
+      - TZ=${TZ:-America/Sao_Paulo}
+    depends_on:
+      - hbbr
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # hbbr — Relay Server (fallback quando P2P falha)  (RustDesk oficial)
+  # --------------------------------------------------------------------------
+  hbbr:
+    container_name: hbbr
+    image: rustdesk/rustdesk-server:${RUSTDESK_SERVER_VERSION:-latest}
+    command: hbbr
+    volumes:
+      - ./data-rustdesk:/root
+    network_mode: "host"
+    environment:
+      - TZ=${TZ:-America/Sao_Paulo}
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # console — API Server + Web UI (terceiro, AGPL-3.0)
+  # É quem recebe heartbeat/sysinfo dos clientes => AUTO-REGISTRO dos dispositivos.
+  #
+  # ATENÇÃO aos 3 desvios em relação ao compose oficial do projeto (ver memoria.md §6):
+  #   1. Monta ./data-console:/app/data  -> o compose oficial NÃO monta, e o SQLite
+  #      viveria só dentro do container (perda de dados ao recriar).
+  #   2. Monta server.yaml em /app/data/server.yaml (working dir real, conforme
+  #      start.sh + config.go) E em /app/server.yaml (caminho do compose oficial).
+  #      Redundância proposital: a config é lida de um dos dois e ainda não foi
+  #      confirmada em execução.
+  #   3. staticdir absoluto em config/server.yaml, senão a UI web quebra.
+  # --------------------------------------------------------------------------
+  console:
+    container_name: rustdesk-console
+    image: ${CONSOLE_IMAGE:-ghcr.io/lantongxue/rustdesk-api-server-pro:latest}
+    environment:
+      # Só têm efeito no PRIMEIRO boot (protegido por /app/data/.init.lock).
+      - ADMIN_USER=${CONSOLE_ADMIN_USER:?defina CONSOLE_ADMIN_USER no .env}
+      - ADMIN_PASS=${CONSOLE_ADMIN_PASS:?defina CONSOLE_ADMIN_PASS no .env}
+      - TZ=${TZ:-America/Sao_Paulo}
+    volumes:
+      - ./data-console:/app/data
+      - ./config/server.yaml:/app/data/server.yaml
+      - ./config/server.yaml:/app/server.yaml
+    network_mode: "host"
+    restart: unless-stopped
