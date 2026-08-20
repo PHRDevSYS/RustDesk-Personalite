@@ -1,0 +1,390 @@
+==============================================================================
+ AzureControlDesk — Server-Install
+ Dimensionamento de hardware e escolha de sistema operacional
+ Hospedagem: on-premise, virtualizada em Proxmox VE
+==============================================================================
+
+ Este documento responde "o que eu preciso ter" — hardware, rede e sistema
+ operacional. O passo a passo de instalar e configurar está no arquivo irmão
+ Server-Config.txt.
+
+ Referências do projeto:
+   Afiminas/memoria.md  §4 (portas), §7 (segurança), §8 (backup), §11 (pendências)
+   VERSIONAMENTO.md     §4 (auto-update do servidor)
+   README.md            (arquitetura e primeiros passos)
+
+
+==============================================================================
+ 0. LEIA ANTES DE COMPRAR — o que muda ao hospedar on-premise
+==============================================================================
+
+ Hospedar localmente resolve custo e controle, mas transfere para você três
+ responsabilidades que um provedor de nuvem absorve:
+
+   1. ENERGIA.  Servidor sem nobreak = frota sem canal de suporte na primeira
+      queda de luz. Nobreak aqui não é acessório, é requisito.
+
+   2. LINK.     A disponibilidade do suporte remoto passa a ser igual à
+      disponibilidade do seu link de internet.
+
+   3. IP PÚBLICO.  Sem ele nada funciona — e este é o ponto que mais mata
+      projeto on-premise no Brasil (ver §1.1).
+
+ Vale registrar a alternativa, para decisão consciente: manter HOMOLOGAÇÃO no
+ Proxmox local e PRODUÇÃO num VPS em São Paulo é um híbrido legítimo, porque
+ desacopla o SLA do cliente da sua infraestrutura física. Se a decisão for
+ tudo local, o resto deste documento cobre o que isso exige.
+
+
+==============================================================================
+ 1. PRÉ-REQUISITOS DE REDE — verificar ANTES de qualquer compra
+==============================================================================
+
+ 1.1 CGNAT — o bloqueador número 1
+ ---------------------------------
+ Boa parte dos links de fibra no Brasil entrega CGNAT: o assinante não tem IP
+ público próprio e, portanto, NÃO é possível redirecionar portas. Se o seu
+ link for CGNAT, este projeto não sobe on-premise — ponto.
+
+ Como verificar, em 30 segundos:
+
+   a) Veja o IP da interface WAN no seu roteador.
+   b) Acesse https://ifconfig.me (ou qualquer site de "meu IP") pela rede.
+   c) IGUAIS      -> você tem IP público. Segue o jogo.
+      DIFERENTES  -> CGNAT. Peça IP público ao provedor (normalmente é um
+                     adicional barato no plano empresarial).
+
+ Sintoma clássico de CGNAT: o IP da WAN cai na faixa 100.64.x.x - 100.127.x.x.
+
+ 1.2 IP fixo ou domínio — não é opcional
+ ---------------------------------------
+ O campo "ID Server" fica GRAVADO na configuração de cada endpoint instalado.
+ Se o endereço mudar, toda a frota perde o servidor de uma vez.
+
+ Portanto: NUNCA aponte a frota para um IP. Use sempre um DOMÍNIO.
+
+   Com IP fixo     -> registro A do domínio apontando para o IP.
+   Com IP dinâmico -> domínio + DDNS (o roteador, ou um ddclient na VM,
+                      atualiza o registro A quando o IP muda).
+
+ O domínio é a pendência §11.2 do memoria.md e é o mesmo bloqueio do HTTPS:
+ Let's Encrypt não emite certificado para endereço IP.
+
+ 1.3 Portas a redirecionar no roteador (NAT / port forward)
+ ----------------------------------------------------------
+ Conforme memoria.md §4:
+
+   PORTA    PROTO   SERVIÇO   OBSERVAÇÃO
+   -------  ------  --------  ----------------------------------------------
+   21115    TCP     hbbs      teste de tipo de NAT
+   21116    TCP     hbbs      hole punching + conexão
+   21116    UDP     hbbs      registro de ID e heartbeat — OBRIGATÓRIA
+   21117    TCP     hbbr      relay
+   80       TCP     Nginx     ACME (Let's Encrypt) + redirect para HTTPS
+   443      TCP     Nginx     console
+   21114    TCP     console   NÃO redirecionar — interna, publicada via 443
+   21118    TCP     —         MANTER FECHADA (decisão de segurança, §4)
+   21119    TCP     —         MANTER FECHADA (decisão de segurança, §4)
+
+ Atenção especial ao UDP 21116: é a porta mais esquecida e a mais crítica.
+ Sem ela o cliente conecta no TCP, parece "quase funcionar" e nunca registra
+ o ID. Endpoint eternamente offline com TCP aberto = suspeito número um é o
+ UDP 21116.
+
+ 1.4 Duas armadilhas de rede local
+ ---------------------------------
+   HAIRPIN NAT (NAT loopback): endpoints na MESMA rede do servidor precisam
+   alcançar o domínio público. Roteador sem hairpin faz justamente esses
+   endpoints falharem, enquanto os externos funcionam. Solução: habilitar NAT
+   loopback, ou criar DNS interno (split-horizon) resolvendo o domínio para o
+   IP interno da VM.
+
+   BLOQUEIO DE 80/443 PELO PROVEDOR: comum em link residencial. Se ocorrer, o
+   Let's Encrypt ainda funciona via desafio DNS-01 (Server-Config.txt §12.4),
+   mas o console deixa de ser acessível de fora pela 443 — o que exigiria VPN
+   ou mudança de plano.
+
+ 1.5 Banda — o dimensionamento que realmente importa
+ ---------------------------------------------------
+ CPU e RAM desta stack são irrisórios. O recurso escasso é UPLOAD.
+
+ Quando o P2P funciona, o servidor só faz sinalização (tráfego desprezível).
+ Quando o P2P falha — NAT simétrico, CGNAT do lado do cliente, firewall
+ corporativo — a sessão inteira passa pelo relay (hbbr), e aí o seu link
+ carrega o vídeo nas duas pontas.
+
+ Estimativa por sessão RELAYED:
+
+   Suporte comum, 1366x768, pouca animação ....... 0,5 a 2 Mbps
+   1080p com rolagem / vídeo ..................... 3 a 8 Mbps
+
+ Regra de bolso para dimensionar o upload:
+
+   upload = sessões_simultâneas
+            x 0,3    (fração típica que cai em relay)
+            x 3 Mbps (taxa média por sessão relayed)
+            x 1,3    (folga)
+
+ Exemplos:
+
+   5 técnicos simultâneos  ->  ~6 Mbps de upload
+   10 técnicos simultâneos ->  ~12 Mbps de upload
+   20 técnicos simultâneos ->  ~23 Mbps de upload
+
+ Ou seja: um link empresarial de 100 Mbps simétrico sobra. O que não pode é
+ link assimétrico com 5 Mbps de upload.
+
+ O heartbeat da frota é ruído estatístico: com deviceCheckJob.duration = 30s,
+ 300 endpoints geram cerca de 10 requisições por segundo, de poucos bytes.
+
+
+==============================================================================
+ 2. HARDWARE DO HOST PROXMOX
+==============================================================================
+
+ 2.1 Mínimo viável (PoC — as 2 máquinas do roteiro de testes)
+ ------------------------------------------------------------
+   CPU ....... 4 threads x86_64 com VT-x / AMD-V habilitado na BIOS
+   RAM ....... 8 GB
+   Disco ..... 1x SSD SATA 240 GB
+   Rede ...... 1x Gigabit Ethernet
+   Energia ... nobreak (mesmo no PoC, para não corromper o SQLite)
+
+ 2.2 Recomendado (produção, até ~300 endpoints)
+ ----------------------------------------------
+   CPU ....... 6 a 8 threads — Ryzen 5, Core i5 de 10ª geração ou superior,
+               ou Xeon E-23xx. Não há exigência de topo de linha.
+   RAM ....... 16 GB  (32 GB se usar ZFS e/ou hospedar outras VMs no host)
+   Disco ..... 2x SSD 480-500 GB em ESPELHO (ZFS mirror ou RAID1)
+               TLC com DRAM, ou enterprise. Evitar QLC barato: o padrão de
+               escrita do SQLite + logs de container desgasta rápido.
+   Rede ...... 1x Gigabit Ethernet
+   Energia ... nobreak senoidal >= 1,2 kVA com comunicação USB (ver §2.5)
+   Backup .... destino externo ao host — NAS, segundo servidor ou HD externo
+
+ 2.3 Por que tão modesto
+ -----------------------
+   hbbs e hbbr são binários Rust: consomem dezenas de MB de RAM e CPU perto de
+   zero em regime. O console é Go + SQLite. A stack inteira em produção
+   raramente passa de 1 GB de RAM efetiva.
+
+   O espelho de disco não é sobre desempenho, é sobre o ativo crítico:
+   data-rustdesk/id_ed25519. Perder essa chave significa reconfigurar TODOS os
+   clientes da frota, um por um (memoria.md §7). Um SSD único é um ponto único
+   de falha em cima do ativo mais caro do projeto.
+
+ 2.4 O que NÃO precisa
+ ---------------------
+   - GPU (nenhum componente usa)
+   - Rede 10 GbE
+   - Mais de 8 núcleos
+   - Disco mecânico grande — o volume de dados é pequeno; o que importa é
+     latência de escrita, não capacidade
+
+ 2.5 Nobreak com comunicação USB — por quê
+ -----------------------------------------
+   Nobreak sem comunicação apenas adia a queda: quando a bateria acaba, a VM
+   morre no meio de uma escrita. Com o cabo USB e o NUT configurado
+   (Server-Config.txt §13.3), o Proxmox desliga as VMs de forma ordenada antes
+   de a bateria esgotar. É a diferença entre "voltou sozinho" e "SQLite
+   corrompido no domingo".
+
+
+==============================================================================
+ 3. SISTEMA OPERACIONAL
+==============================================================================
+
+ 3.1 Hipervisor
+ --------------
+   Proxmox VE 9.x (base Debian 13 "trixie").
+   Se você já opera a série 8.x, ela também atende — não há dependência do
+   projeto em recurso específico da 9.
+
+ 3.2 Sistema das VMs
+ -------------------
+   RECOMENDADO:  Debian 13 (trixie), instalação mínima, sem ambiente gráfico.
+   ALTERNATIVA:  Ubuntu Server 24.04 LTS (ou a LTS mais recente que você já
+                 administre no dia a dia).
+
+   Por que Debian:
+     - É a mesma base do Proxmox: um sistema a conhecer, não dois.
+     - Instalação mínima ocupa pouco e expõe pouca superfície.
+     - O Docker publica repositório oficial para Debian estável.
+     - Os scripts do projeto (servidor/scripts/*.sh) assumem um Linux comum
+       com bash, docker, git, curl, python3 e ss (iproute2) — dependências
+       verificadas na entrada por comum.sh.
+
+   NÃO usar: distro sem systemd (o auto-update é service + timer), nem Alpine
+   (musl e ausência de bash mudam o comportamento dos scripts).
+
+ 3.3 VM (KVM) e não container LXC — decisão
+ ------------------------------------------
+   É tentador rodar em LXC para economizar overhead. Não faça, por três
+   motivos concretos:
+
+     a) Docker dentro de LXC exige container privilegiado ou uma coleção de
+        ajustes (nesting, keyctl, fuse) que quebram a cada atualização.
+     b) O compose usa network_mode: host — a interação disso com a rede do LXC
+        é fonte de comportamento difícil de diagnosticar.
+     c) Este é o plano de controle da frota inteira de clientes. Isolamento de
+        VM aqui vale mais que os ~200 MB de RAM economizados.
+
+ 3.4 Duas VMs, não uma — e por quê
+ ---------------------------------
+   O compose usa network_mode: host, então hbbs, hbbr e console fazem bind
+   direto nas portas do sistema. Homologação e produção NÃO podem coexistir na
+   mesma VM: colidiriam em 21114 a 21117.
+
+   Uma VM por ambiente também dá um benefício de operação: você tira snapshot
+   da VM de produção antes de promover uma versão, e o rollback deixa de
+   depender apenas do healthcheck (VERSIONAMENTO.md §4).
+
+   ATENÇÃO: com um único IP público, apenas UM dos ambientes pode ocupar as
+   portas padrão do RustDesk voltadas para a internet. Recomendação:
+
+     - PRODUÇÃO fica com o port forward público.
+     - HOMOLOGAÇÃO é testada a partir da LAN (endpoints de teste dentro da
+       rede, apontando para o IP interno da VM).
+
+   Se homologação precisar mesmo ser alcançável de fora, isso exige um segundo
+   IP público. Não tente resolver com portas alternativas: o cliente RustDesk
+   assume as portas padrão em vários caminhos, e o ganho não paga o risco de
+   um teste passar em condições que produção não reproduz.
+
+ 3.5 Especificação das VMs
+ -------------------------
+   VM               vCPU   RAM     DISCO   OBSERVAÇÃO
+   ---------------  -----  ------  ------  --------------------------------
+   azuredesk-hml     2      2 GB    32 GB   pode ficar ligada sob demanda
+   azuredesk-prd     4      4 GB    64 GB   sempre ligada, start at boot
+
+   A folga é proposital: o crescimento previsível é o server.db do console,
+   que guarda dispositivos, book, usuários e o log de acessos (memoria.md
+   §6.2). Ainda assim, 64 GB atende anos.
+
+ 3.6 Opções de hardware virtual (Proxmox)
+ ----------------------------------------
+   Máquina ............ q35
+   BIOS ............... OVMF (UEFI) + EFI Disk
+   Processador (tipo) . host          <- repassa as instruções do host
+   Controladora SCSI .. VirtIO SCSI single
+   Disco .............. SCSI, Discard = ligado, SSD emulation = ligado,
+                        Cache = Default (no cache)
+   Rede ............... VirtIO (paravirtualizado), bridge vmbr0
+   Ballooning ......... DESLIGADO na VM de produção (min = max)
+   QEMU Guest Agent ... habilitado nas Opções + pacote instalado na VM
+   Start at boot ...... ligado, com Startup order definido
+
+   Duas justificativas que importam:
+
+     Cache = Default (no cache) — o SQLite depende de fsync honesto. Cache
+     write-back sem bateria transforma queda de energia em banco corrompido.
+     Com nobreak + NUT o risco cai, mas o ganho de desempenho aqui é
+     irrelevante: não há por que aceitar a troca.
+
+     Ballooning desligado em produção — devolver RAM sob pressão faz o kernel
+     descartar o page cache do SQLite justamente sob carga.
+
+ 3.7 Firewall: escolha UM lugar
+ ------------------------------
+   O Proxmox tem firewall em três níveis (datacenter, nó, VM) e a VM ainda
+   terá ufw. Regra que sobrevive em dois lugares é regra que ninguém encontra
+   quando quebra.
+
+   Decisão recomendada: manter o firewall do Proxmox DESABILITADO para estas
+   VMs e concentrar tudo no ufw de dentro da VM, que é o que memoria.md §4 já
+   documenta. Se optar pelo contrário, lembre-se de liberar UDP 21116 nos dois
+   — é o esquecimento clássico.
+
+   Observação técnica: o famoso problema de "Docker fura o ufw" NÃO se aplica
+   aqui. Com network_mode: host não há publicação de porta via iptables/DOCKER
+   — os processos fazem bind direto e as regras do ufw valem normalmente.
+
+
+==============================================================================
+ 4. ARMAZENAMENTO E BACKUP
+==============================================================================
+
+ 4.1 Layout no host
+ ------------------
+   RECOMENDADO: ZFS RAID1 (mirror), escolhido já na instalação do Proxmox.
+     - checksum de ponta a ponta (detecta corrupção silenciosa)
+     - snapshot e replicação nativos
+     - CUIDADO: o ARC do ZFS consome RAM. Com 16 GB no host, limite o ARC em
+       ~4 GB (procedimento no Server-Config.txt §2.3), senão o hipervisor fica
+       sem memória para as VMs.
+
+   ALTERNATIVA: RAID1 por controladora + LVM-thin. Mais simples, menos
+   recursos, também aceita snapshot de VM.
+
+ 4.2 O que precisa de backup (memoria.md §8)
+ -------------------------------------------
+   Caminhos relativos a /opt/azuredesk/ambientes/<ambiente>/ dentro da VM:
+
+     data-rustdesk/id_ed25519      chave privada — ATIVO MAIS CRÍTICO
+     data-rustdesk/id_ed25519.pub  chave pública (a "Key" do cliente)
+     data-console/server.db        dispositivos, book, usuários, log de acessos
+     .env                          configuração e credenciais do ambiente
+     config/server.yaml            signKey e config do console
+
+   Fora do diretório do ambiente:
+
+     /etc/default/azuredesk        qual ambiente este host é
+     /etc/letsencrypt/             certificados (quando o HTTPS entrar)
+
+   O compose.yml e os scripts NÃO precisam de backup: vivem no Git e o
+   auto-update os restaura com git reset --hard. O que não está versionado é
+   exatamente o que o backup precisa cobrir.
+
+ 4.3 Duas camadas, não uma
+ -------------------------
+   CAMADA 1 — vzdump / Proxmox Backup Server da VM inteira, diário, para
+   destino FORA do host. Resolve "o servidor pegou fogo".
+
+   CAMADA 2 — backup em nível de aplicação dos arquivos de §4.2, também para
+   fora do host. Resolve "preciso restaurar só o banco" e "preciso subir o
+   ambiente em outra máquina hoje".
+
+   Snapshot de VM no mesmo disco NÃO é backup: morre junto com o host.
+
+ 4.4 A regra que memoria.md §8 impõe
+ -----------------------------------
+   O ciclo obrigatório é BACKUP -> RESTORE -> VALIDAÇÃO.
+   "Backup criado" não conta. Um restore precisa ser testado numa VM
+   descartável, com healthcheck passando, antes de a frota entrar.
+
+
+==============================================================================
+ 5. CHECKLIST DE AQUISIÇÃO E PRÉ-REQUISITOS
+==============================================================================
+
+   REDE
+   [ ] IP público confirmado (teste de CGNAT do §1.1 feito)
+   [ ] IP fixo contratado, OU DDNS definido
+   [ ] Domínio registrado e DNS sob controle conhecido   (pendência §11.2)
+   [ ] Roteador com suporte a port forward e a NAT loopback
+   [ ] Upload medido e comparado com a fórmula do §1.5
+   [ ] Confirmado com o provedor que 80/443 não estão bloqueadas
+
+   HARDWARE
+   [ ] Host com VT-x / AMD-V habilitado na BIOS
+   [ ] 16 GB de RAM
+   [ ] 2 SSDs iguais para o espelho
+   [ ] Nobreak com cabo USB conectado ao host
+   [ ] Destino de backup externo ao host definido
+
+   SOFTWARE
+   [ ] ISO do Proxmox VE 9.x
+   [ ] ISO do Debian 13 netinst
+   [ ] Acesso ao repositório PHRDevSYS/RustDesk-Personalite a partir da VM
+
+   DECISÕES (memoria.md §11)
+   [x] §11.1 Hospedagem — RESOLVIDA: Proxmox on-premise
+   [ ] §11.2 Domínio corporativo e administrador do DNS — EM ABERTO.
+             Bloqueia o HTTPS e, por consequência, a instalação definitiva da
+             frota: o API Server gravado em cada endpoint tem de já ser o
+             endereço final.
+
+==============================================================================
+ Próximo passo: Server-Config.txt
+==============================================================================

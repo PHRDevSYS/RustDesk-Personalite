@@ -1,0 +1,820 @@
+==============================================================================
+ AzureControlDesk — Server-Config
+ Instalação e configuração: do Proxmox zerado ao ambiente validado
+==============================================================================
+
+ Pré-requisito: ter lido e atendido o Server-Install.txt, em especial o
+ checklist do §5 e os pré-requisitos de rede do §1.
+
+ Convenções usadas neste documento — substitua ao executar:
+
+   <LAN>          faixa da sua rede local           ex.: 192.168.0.0/24
+   <IP-VM>        IP estático da VM                 ex.: 192.168.0.50
+   <GW>           gateway da rede                   ex.: 192.168.0.1
+   <IP-PUBLICO>   IP público do seu link
+   <DOMINIO>      domínio do console                ex.: suporte.afiminas.com.br
+   <AMBIENTE>     homologacao  ou  producao
+
+ Ordem de execução: §1 -> §11 sobem o ambiente funcionando em HTTP. O §12
+ (HTTPS) depende do domínio, que é a pendência §11.2 do memoria.md.
+
+ REGRA DE OURO: faça o caminho inteiro em HOMOLOGAÇÃO primeiro. Só repita em
+ produção depois que o roteiro de PoC (Afiminas/roteiro-poc.md) passar.
+
+
+==============================================================================
+ 1. INSTALAÇÃO DO PROXMOX VE
+==============================================================================
+
+ 1.1 Preparação
+ --------------
+   - Grave a ISO do Proxmox VE 9.x em pendrive (Rufus em modo DD, ou
+     balenaEtcher).
+   - Na BIOS do host: habilite VT-x / AMD-V e desabilite Secure Boot se o
+     instalador reclamar.
+   - Conecte o cabo de rede na porta que virará a vmbr0.
+
+ 1.2 Durante o instalador
+ ------------------------
+   Filesystem ....... zfs (RAID1), selecionando os DOIS SSDs.
+                      Se for usar RAID por controladora, escolha ext4/LVM.
+   Country/Timezone . Brazil / America/Sao_Paulo
+   Keymap ........... conforme seu teclado (br-abnt2 ou us)
+   Password ......... senha forte de root — este é o console do hipervisor
+   E-mail ........... um endereço real; é para onde vão os alertas do ZFS
+   Management IP .... IP ESTÁTICO na sua LAN, fora da faixa do DHCP
+   Gateway/DNS ...... <GW> e o DNS que você usa
+
+   Ao final: https://<IP-do-Proxmox>:8006  (usuário root, realm "Linux PAM")
+
+ 1.3 Pós-instalação do host
+ --------------------------
+   Sem subscrição, troque para o repositório "no-subscription", senão o
+   apt update falha:
+
+     # Proxmox VE 9.x usa o formato deb822
+     nano /etc/apt/sources.list.d/pve-enterprise.sources     # comente tudo
+     nano /etc/apt/sources.list.d/proxmox.sources
+
+   Conteúdo de proxmox.sources:
+
+     Types: deb
+     URIs: http://download.proxmox.com/debian/pve
+     Suites: trixie
+     Components: pve-no-subscription
+     Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
+
+   Depois:
+
+     apt update && apt full-upgrade -y
+     reboot
+
+   (Na série 8.x o arquivo é /etc/apt/sources.list.d/pve-enterprise.list e a
+   linha equivalente é:
+    deb http://download.proxmox.com/debian/pve bookworm pve-no-subscription)
+
+
+==============================================================================
+ 2. AJUSTES DO HOST ANTES DE CRIAR AS VMs
+==============================================================================
+
+ 2.1 Upload das ISOs
+ -------------------
+   Datacenter -> pve -> local -> ISO Images -> Upload
+   Envie a ISO do Debian 13 netinst.
+
+ 2.2 Firewall do Proxmox
+ -----------------------
+   Decisão do Server-Install.txt §3.7: as regras ficam no ufw da VM.
+   Confirme que o firewall está desabilitado em Datacenter -> Firewall ->
+   Options e em pve -> Firewall -> Options.
+
+   Se você preferir habilitá-lo, lembre-se: precisa liberar UDP 21116
+   explicitamente. Esse é o erro que gera horas de diagnóstico.
+
+ 2.3 Limite do ARC do ZFS (só se instalou com ZFS)
+ -------------------------------------------------
+   Com 16 GB de RAM no host, limite o cache do ZFS em 4 GB:
+
+     echo "options zfs zfs_arc_max=4294967296" > /etc/modprobe.d/zfs.conf
+     update-initramfs -u -k all
+     reboot
+
+   Confira depois: arc_summary | head -20
+
+ 2.4 Alertas por e-mail (recomendado)
+ ------------------------------------
+   O ZFS avisa por e-mail quando um disco do espelho falha. Sem isso, você
+   descobre no dia em que o segundo disco morre. Configure em
+   Datacenter -> Notifications, ou instale postfix com um relay SMTP.
+
+
+==============================================================================
+ 3. CRIAÇÃO DA VM
+==============================================================================
+
+ 3.1 Pela interface (Create VM)
+ ------------------------------
+   General .... VM ID: 110 (hml) / 100 (prd)
+                Name:  azuredesk-hml / azuredesk-prd
+                Start at boot: MARCADO (na de produção)
+   OS ......... ISO do Debian 13; Type: Linux; Version: 6.x - 2.6 Kernel
+   System ..... Graphic card: Default
+                Machine: q35
+                BIOS: OVMF (UEFI)   -> adicione o EFI Disk no mesmo storage
+                SCSI Controller: VirtIO SCSI single
+                Qemu Agent: MARCADO
+   Disks ...... Bus: SCSI
+                Size: 32 GB (hml) / 64 GB (prd)
+                Cache: Default (no cache)
+                Discard: MARCADO
+                SSD emulation: MARCADO
+   CPU ........ Sockets 1 / Cores 2 (hml) ou 4 (prd) / Type: host
+   Memory ..... 2048 (hml) / 4096 (prd)
+                Ballooning Device: DESMARCADO na de produção
+   Network .... Bridge vmbr0 / Model: VirtIO (paravirtualized)
+                Firewall: DESMARCADO (decisão do §2.2)
+
+ 3.2 Pela CLI (equivalente, se preferir)
+ ---------------------------------------
+   qm create 100 --name azuredesk-prd --ostype l26 \
+     --machine q35 --bios ovmf --agent enabled=1 \
+     --cpu host --sockets 1 --cores 4 \
+     --memory 4096 --balloon 0 \
+     --scsihw virtio-scsi-single \
+     --net0 virtio,bridge=vmbr0 \
+     --onboot 1 --startup order=1
+
+   qm set 100 --efidisk0 local-zfs:1,efitype=4m,pre-enrolled-keys=1
+   qm set 100 --scsi0 local-zfs:64,discard=on,ssd=1
+   qm set 100 --ide2 local:iso/debian-13-netinst.iso,media=cdrom
+   qm set 100 --boot order='scsi0;ide2'
+
+   (troque local-zfs pelo nome do seu storage: pvesm status)
+
+
+==============================================================================
+ 4. INSTALAÇÃO DO DEBIAN NA VM
+==============================================================================
+
+ 4.1 Durante o instalador
+ ------------------------
+   Idioma/local .... Português do Brasil ou English — indiferente
+   Hostname ........ azuredesk-prd
+   Domínio ......... deixe em branco, ou o seu domínio interno
+   Root ............ defina senha forte (ou deixe vazio para usar só sudo)
+   Usuário ......... crie um usuário administrativo (ex.: azuredesk)
+   Particionamento . "Usar disco inteiro" -> "Todos os arquivos em uma
+                     partição". Não precisa de LVM: o snapshot é feito no
+                     Proxmox, não dentro da VM.
+   Espelho apt ..... Brasil -> deb.debian.org
+   Coleta de dados . NÃO
+   Seleção de software:
+       [ ] Ambiente de trabalho (DESMARCAR TUDO)
+       [x] Servidor SSH
+       [x] Utilitários padrão do sistema
+
+ 4.2 Primeiro acesso
+ -------------------
+   ssh azuredesk@<IP-VM>
+   su -            # ou sudo -i, se instalou o sudo
+
+
+==============================================================================
+ 5. CONFIGURAÇÃO BASE DO SISTEMA
+==============================================================================
+
+ 5.1 Atualizar e instalar o básico
+ ---------------------------------
+   apt update && apt full-upgrade -y
+   apt install -y sudo git curl ca-certificates gnupg python3 iproute2 \
+                  openssl ufw chrony qemu-guest-agent unattended-upgrades \
+                  sqlite3
+
+   usermod -aG sudo azuredesk
+   systemctl enable --now qemu-guest-agent
+   systemctl enable --now chrony
+
+   O pacote sqlite3 não é exigido pelos scripts do projeto — entra para o
+   backup consistente do banco (§13.2).
+
+ 5.2 IP estático
+ ---------------
+   O ID Server e o API Server dos endpoints apontam para este host. IP por
+   DHCP aqui é bomba-relógio.
+
+   nano /etc/network/interfaces
+
+     auto ens18
+     iface ens18 inet static
+         address <IP-VM>/24
+         gateway <GW>
+         dns-nameservers <GW> 1.1.1.1
+
+   (confirme o nome da interface com: ip -br link)
+
+   systemctl restart networking
+   ip -br addr        # verifique
+
+   Alternativa: reserva de DHCP por MAC no roteador. Funciona, mas depende de
+   o roteador estar de pé e configurado — o estático na VM é mais previsível.
+
+ 5.3 Fuso horário
+ ----------------
+   timedatectl set-timezone America/Sao_Paulo
+   timedatectl                 # confirme "System clock synchronized: yes"
+
+   Relógio errado quebra validação de token do console e desalinha o log de
+   acessos com o que o cliente relata.
+
+ 5.4 SSH por chave (recomendado)
+ -------------------------------
+   Da sua estação Windows:
+
+     ssh-keygen -t ed25519 -C "azuredesk-admin"
+     type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh azuredesk@<IP-VM> `
+       "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+
+   Depois, na VM:
+
+     nano /etc/ssh/sshd_config
+       PermitRootLogin no
+       PasswordAuthentication no
+     systemctl restart ssh
+
+   Teste em OUTRA janela antes de fechar a sessão atual.
+
+ 5.5 Atualizações de segurança automáticas
+ -----------------------------------------
+   dpkg-reconfigure -plow unattended-upgrades      # responda "Sim"
+
+   Isso cobre o SO. As atualizações da APLICAÇÃO vêm por outro caminho: o
+   auto-update do projeto (§10).
+
+
+==============================================================================
+ 6. DOCKER
+==============================================================================
+
+ 6.1 Repositório oficial
+ -----------------------
+   Use o repositório do Docker, não o docker.io do Debian: os scripts do
+   projeto usam "docker compose" (plugin v2), que o pacote da distro não
+   entrega de forma confiável.
+
+     install -m 0755 -d /etc/apt/keyrings
+     curl -fsSL https://download.docker.com/linux/debian/gpg \
+          -o /etc/apt/keyrings/docker.asc
+     chmod a+r /etc/apt/keyrings/docker.asc
+
+     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+     https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+       > /etc/apt/sources.list.d/docker.list
+
+     apt update
+     apt install -y docker-ce docker-ce-cli containerd.io \
+                    docker-buildx-plugin docker-compose-plugin
+
+   SE O apt update FALHAR com 404: o repositório do Docker pode ainda não ter
+   o codinome do Debian 13. Nesse caso, troque no comando acima
+   $VERSION_CODENAME por bookworm — os pacotes são compatíveis.
+
+ 6.2 Validação
+ -------------
+   systemctl enable --now docker
+   docker --version
+   docker compose version         # precisa responder v2.x
+   docker run --rm hello-world
+
+ 6.3 Limitar o log dos containers
+ --------------------------------
+   Sem isso, o json-file cresce até encher o disco.
+
+   cat > /etc/docker/daemon.json <<'JSON'
+   {
+     "log-driver": "json-file",
+     "log-opts": { "max-size": "10m", "max-file": "3" }
+   }
+   JSON
+
+   systemctl restart docker
+
+ 6.4 Conferir as dependências que o projeto exige
+ ------------------------------------------------
+   O comum.sh aborta se faltar qualquer uma. Confira antes:
+
+     for d in docker git curl python3 ss; do
+       command -v $d >/dev/null && echo "OK   $d" || echo "FALTA $d"
+     done
+
+
+==============================================================================
+ 7. FIREWALL (ufw)
+==============================================================================
+
+ Conforme memoria.md §4. Note que 21114 NÃO é aberta para a internet: fica
+ acessível só pela LAN durante o PoC e, depois, apenas via Nginx na 443.
+
+   ufw default deny incoming
+   ufw default allow outgoing
+
+   # SSH restrito à LAN
+   ufw allow from <LAN> to any port 22 proto tcp
+
+   # RustDesk — sinalização e relay
+   ufw allow 21115:21117/tcp
+   ufw allow 21116/udp
+
+   # Console: só pela LAN enquanto não houver HTTPS
+   ufw allow from <LAN> to any port 21114 proto tcp
+
+   # Nginx — habilitar apenas quando o §12 for executado
+   # ufw allow 80,443/tcp
+
+   ufw enable
+   ufw status verbose
+
+ 21118 e 21119 permanecem fechadas por decisão de segurança (memoria.md §4):
+ com WebSocket habilitado, hbbs/hbbr confiam sem validar nos cabeçalhos
+ X-Real-IP / X-Forwarded-For, o que permite forjar IP e burlar rate limiting.
+
+ Lembrete do Server-Install.txt §3.7: com network_mode: host não existe o
+ furo clássico "Docker ignora o ufw". As regras acima valem de fato.
+
+
+==============================================================================
+ 8. CLONE E PROVISIONAMENTO DO AMBIENTE
+==============================================================================
+
+ 8.1 Clone
+ ---------
+   git clone https://github.com/PHRDevSYS/RustDesk-Personalite.git /opt/azuredesk
+   cd /opt/azuredesk
+   git checkout <AMBIENTE>          # homologacao  ou  producao
+
+   A branch É o ambiente. Não existe ambiente rodando main.
+
+ 8.2 Arquivos de configuração
+ ----------------------------
+   cd /opt/azuredesk
+   cp ambientes/<AMBIENTE>/.env.example               ambientes/<AMBIENTE>/.env
+   cp ambientes/<AMBIENTE>/config/server.yaml.example ambientes/<AMBIENTE>/config/server.yaml
+
+   ATENÇÃO: copie os dois ANTES do primeiro "compose up". Se o server.yaml não
+   existir quando o compose subir, o Docker cria um DIRETÓRIO com esse nome e
+   o console falha depois com erro de parse, sem pista da causa. O comum.sh já
+   detecta e avisa esse caso.
+
+ 8.3 Preencher o .env
+ --------------------
+   nano ambientes/<AMBIENTE>/.env
+
+   Campos que você precisa preencher:
+
+     SUPPORT_EMAIL=suporte@afiminas.com.br
+
+     RUSTDESK_DOMAIN=<DOMINIO>
+     RUSTDESK_ID_SERVER=<DOMINIO>
+     RUSTDESK_API_SERVER=http://<IP-VM>:21114     # provisório, ver aviso
+
+     CONSOLE_ADMIN_USER=<usuario_admin>
+     CONSOLE_ADMIN_PASS=<senha_forte_gerada>
+
+   Gere a senha do admin:  openssl rand -base64 24
+
+   AVISO IMPORTANTE sobre RUSTDESK_ID_SERVER e RUSTDESK_API_SERVER:
+   esses dois valores ficam GRAVADOS na config de cada endpoint instalado.
+   Use IP apenas nas máquinas de teste do PoC. Antes de instalar a frota,
+   resolva o domínio e o HTTPS (§12) e coloque aqui o endereço definitivo —
+   caso contrário, mudar depois significa reconfigurar máquina por máquina.
+
+   CONSOLE_ADMIN_USER / PASS só têm efeito no PRIMEIRO boot, protegidos por
+   /app/data/.init.lock. Depois disso, trocar aqui não muda nada: use a UI.
+
+ 8.4 Preencher o server.yaml
+ ---------------------------
+   Gere o signKey:
+
+     openssl rand -base64 32
+
+   nano ambientes/<AMBIENTE>/config/server.yaml
+     signKey: "<cole_o_valor_gerado>"
+
+   REGRAS (memoria.md §7):
+     - O signKey versionado no projeto upstream é PÚBLICO. Trocar é
+       obrigatório, não recomendado.
+     - O signKey de homologação DEVE ser diferente do de produção. Iguais, um
+       token emitido em HML vale em PRD.
+     - Em produção, confirme: debugMode: false e printRequestLog: false.
+
+   Não invente chaves fora da lista do arquivo .example — elas vêm de
+   backend/config/config.go do console (memoria.md §6.1).
+
+ 8.5 Permissões
+ --------------
+   chmod 600 ambientes/<AMBIENTE>/.env
+   chmod 600 ambientes/<AMBIENTE>/config/server.yaml
+
+ 8.6 Conferência
+ ---------------
+   git status --short --untracked-files=all
+
+   .env, config/server.yaml e os diretórios de dados devem estar IGNORADOS.
+   Se algum aparecer como untracked pronto para commit, pare: há secret
+   prestes a ir para o Git.
+
+
+==============================================================================
+ 9. SUBIR O STACK E VALIDAR
+==============================================================================
+
+ 9.1 Subida
+ ----------
+   cd /opt/azuredesk
+   export AMBIENTE=<AMBIENTE>
+
+   docker compose --project-directory ambientes/$AMBIENTE \
+                  --env-file        ambientes/$AMBIENTE/.env \
+                  -f servidor/compose.yml up -d
+
+ 9.2 Healthcheck
+ ---------------
+   ./servidor/scripts/healthcheck.sh -v
+
+   Esperado: todos os itens em [ OK ]. O -v imprime a Key pública, que você
+   vai precisar no §11.
+
+   Se falhar, comece por:
+     docker compose --project-directory ambientes/$AMBIENTE \
+                    --env-file ambientes/$AMBIENTE/.env \
+                    -f servidor/compose.yml logs --tail=100
+
+ 9.3 Portas em escuta
+ --------------------
+   ss -lntup | grep -E '21114|21115|21116|21117'
+
+   Devem aparecer: 21114 TCP (console), 21115 TCP, 21116 TCP **e UDP**,
+   21117 TCP. A linha UDP é a que costuma faltar quando algo está errado.
+
+ 9.4 Console
+ -----------
+   Do seu navegador, na LAN:  http://<IP-VM>:21114
+   Entre com CONSOLE_ADMIN_USER / CONSOLE_ADMIN_PASS.
+
+   Observação registrada no memoria.md (achado 11): o console NÃO tem painel
+   de configuração exposto — a tabela system_settings existe, mas nenhuma
+   rota a expõe. Toda a configuração é feita pelo server.yaml e pelo .env.
+
+
+==============================================================================
+ 10. AUTO-UPDATE DO SERVIDOR
+==============================================================================
+
+ Detalhes do mecanismo e do rollback: VERSIONAMENTO.md §4.
+
+   # O ambiente vive FORA do repositório. Editar a unit versionada seria
+   # revertido pelo git reset --hard do próprio auto-update — e um servidor
+   # de produção poderia voltar silenciosamente a apontar para homologação.
+   echo 'AMBIENTE=<AMBIENTE>' > /etc/default/azuredesk
+
+   cp /opt/azuredesk/servidor/systemd/azuredesk-autoupdate.* /etc/systemd/system/
+   systemctl daemon-reload
+   systemctl enable --now azuredesk-autoupdate.service azuredesk-autoupdate.timer
+
+   systemctl list-timers azuredesk-autoupdate.timer
+   journalctl -u azuredesk-autoupdate -f
+
+ A unit exige o /etc/default/azuredesk (EnvironmentFile sem "-"): se o arquivo
+ sumir, o serviço FALHA em vez de assumir um padrão. É intencional.
+
+ Operação manual:
+
+   AMBIENTE=<AMBIENTE> /opt/azuredesk/servidor/scripts/autoupdate-servidor.sh --forcar
+   AMBIENTE=<AMBIENTE> /opt/azuredesk/servidor/scripts/healthcheck.sh -v
+   systemctl stop azuredesk-autoupdate.timer      # congelar o ambiente
+
+ Códigos de saída do auto-update:
+   0 = atualizado (ou nada a fazer)
+   1 = falhou e fez ROLLBACK — ambiente intacto na versão anterior
+   9 = falhou e o rollback também falhou — INTERVENÇÃO MANUAL
+
+ Recomendação de operação com Proxmox: antes de promover uma versão para
+ produção, tire um snapshot da VM. O rollback do script cobre a aplicação; o
+ snapshot cobre o que ele não alcança.
+
+
+==============================================================================
+ 11. ROTEADOR E CONFIGURAÇÃO DO CLIENTE
+==============================================================================
+
+ 11.1 Port forward
+ -----------------
+   No roteador, redirecione para <IP-VM>:
+
+     21115  TCP
+     21116  TCP
+     21116  UDP     <- a mais esquecida e a mais crítica
+     21117  TCP
+     80     TCP     (só quando o §12 entrar)
+     443    TCP     (só quando o §12 entrar)
+
+   NÃO redirecione 21114, 21118 nem 21119.
+
+   Habilite NAT loopback / hairpin, senão as máquinas da própria rede não
+   alcançarão o domínio público (Server-Install.txt §1.4).
+
+ 11.2 DDNS (se o IP não for fixo)
+ --------------------------------
+   Configure no roteador, ou na VM:
+
+     apt install -y ddclient        # e configure conforme o seu provedor DNS
+
+ 11.3 Obter os valores do cliente
+ --------------------------------
+   ID Server ..... <DOMINIO>   (no PoC, <IP-VM> ou <IP-PUBLICO>)
+   Key ........... saída do healthcheck -v, ou:
+                   cat /opt/azuredesk/ambientes/<AMBIENTE>/data-rustdesk/id_ed25519.pub
+   API Server .... http://<IP-VM>:21114   (PoC)  /  https://<DOMINIO>  (final)
+   Relay Server .. deixar vazio; o RustDesk deduz
+
+   A "Key" é a chave pública de criptografia, não licença.
+
+ 11.4 Gerar a config string (memoria.md §5.2)
+ --------------------------------------------
+   1. Numa máquina, abra o cliente RustDesk.
+   2. Menu ⋮ -> Network -> destravar (cadeado).
+   3. Preencha ID Server, Key e API Server.
+   4. Clique em "Export Server Config" -> copie a string gerada.
+
+ 11.5 Instalar o endpoint (Windows, como Administrador)
+ ------------------------------------------------------
+   .\agente\windows\install-agent.ps1 -ConfigString "COLE_A_STRING" -Ambiente <AMBIENTE>
+
+   O script gera senha de acesso não supervisionado ALEATÓRIA por dispositivo
+   e registra a Tarefa Agendada do auto-update (boot + a cada 6h).
+
+ 11.6 Validação
+ --------------
+   Roteiro completo: Afiminas/roteiro-poc.md (9 testes).
+   O teste-chave desta etapa: o dispositivo aparecer SOZINHO no console —
+   é o auto-registro via heartbeat/sysinfo funcionando.
+
+
+==============================================================================
+ 12. HTTPS — Nginx + Certbot   [BLOQUEADO PELA PENDÊNCIA §11.2]
+==============================================================================
+
+ Execute esta seção assim que o domínio estiver definido. Faça ANTES de
+ instalar a frota: o API Server fica gravado em cada endpoint, e migrar
+ depois significa reconfigurar todas as máquinas.
+
+ Sem isto, trafegam em texto legível a senha do técnico, o token de sessão, a
+ lista de clientes, o log de acessos e o heartbeat de cada endpoint. Há um
+ agravante em memoria.md §5.4 (descoberta 2): a resposta do heartbeat carrega
+ o campo "strategy", que o cliente RustDesk aplica automaticamente — quem
+ consegue alterar as respostas HTTP não só espiona, empurra configuração para
+ os endpoints.
+
+ A sessão remota em si (tela, teclado, arquivos) já é criptografada ponta a
+ ponta pelo RustDesk nas portas 21115-21117 e não muda. O buraco é o plano de
+ controle.
+
+ 12.1 DNS
+ --------
+   Registro A: <DOMINIO> -> <IP-PUBLICO>
+   Confirme: dig +short <DOMINIO>
+
+ 12.2 Instalar
+ -------------
+   apt install -y nginx certbot python3-certbot-nginx
+   ufw allow 80,443/tcp
+
+ 12.3 Configuração do site
+ -------------------------
+   nano /etc/nginx/sites-available/azuredesk
+
+     server {
+         listen 80;
+         server_name <DOMINIO>;
+         location /.well-known/acme-challenge/ { root /var/www/html; }
+         location / { return 301 https://$host$request_uri; }
+     }
+
+     server {
+         listen 443 ssl;
+         http2 on;
+         server_name <DOMINIO>;
+
+         # preenchidos pelo certbot no passo 12.4
+         # ssl_certificate     /etc/letsencrypt/live/<DOMINIO>/fullchain.pem;
+         # ssl_certificate_key /etc/letsencrypt/live/<DOMINIO>/privkey.pem;
+
+         client_max_body_size 50m;
+
+         location / {
+             proxy_pass http://127.0.0.1:21114;
+             proxy_http_version 1.1;
+             proxy_set_header Host              $host;
+             proxy_set_header X-Real-IP         $remote_addr;
+             proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+             proxy_set_header X-Forwarded-Proto $scheme;
+             proxy_set_header Upgrade           $http_upgrade;
+             proxy_set_header Connection        "upgrade";
+             proxy_read_timeout 300s;
+         }
+     }
+
+   ln -s /etc/nginx/sites-available/azuredesk /etc/nginx/sites-enabled/
+   rm -f /etc/nginx/sites-enabled/default
+   nginx -t && systemctl reload nginx
+
+ 12.4 Certificado
+ ----------------
+   Caminho normal (porta 80 acessível de fora):
+
+     certbot --nginx -d <DOMINIO> --agree-tos -m <SUPPORT_EMAIL> --no-eff-email
+
+   Se o provedor bloquear a porta 80, use o desafio DNS-01. Exemplo com
+   Cloudflare:
+
+     apt install -y python3-certbot-dns-cloudflare
+     printf 'dns_cloudflare_api_token = SEU_TOKEN\n' > /root/.cf.ini
+     chmod 600 /root/.cf.ini
+     certbot certonly --dns-cloudflare \
+             --dns-cloudflare-credentials /root/.cf.ini -d <DOMINIO>
+
+   Renovação automática (o certbot já instala o timer):
+
+     systemctl list-timers | grep certbot
+     certbot renew --dry-run
+
+ 12.5 Fechar a 21114 e apontar a frota para o HTTPS
+ --------------------------------------------------
+   ufw delete allow from <LAN> to any port 21114 proto tcp
+
+   nano /opt/azuredesk/ambientes/<AMBIENTE>/.env
+     RUSTDESK_API_SERVER=https://<DOMINIO>
+
+   Suba de novo e valide:
+
+     export AMBIENTE=<AMBIENTE>
+     docker compose --project-directory ambientes/$AMBIENTE \
+                    --env-file ambientes/$AMBIENTE/.env \
+                    -f servidor/compose.yml up -d
+     ./servidor/scripts/healthcheck.sh -v
+     curl -I https://<DOMINIO>
+
+   Gere uma NOVA config string (§11.4) com o API Server em https e use-a nas
+   instalações a partir daqui.
+
+
+==============================================================================
+ 13. BACKUP, RESTORE E ENERGIA
+==============================================================================
+
+ 13.1 Camada 1 — VM inteira (no Proxmox)
+ ---------------------------------------
+   Datacenter -> Backup -> Add
+     Storage ..... um destino FORA dos discos do host (NAS, USB, PBS)
+     Schedule .... diário, fora do horário comercial
+     Mode ........ Snapshot
+     Compression . ZSTD
+     Retention ... ex.: manter 7 diários, 4 semanais, 6 mensais
+
+ 13.2 Camada 2 — nível de aplicação
+ ----------------------------------
+   Cobre os itens de memoria.md §8. Grave em /usr/local/sbin/backup-azuredesk.sh:
+
+     #!/bin/bash
+     set -euo pipefail
+     AMB="$(. /etc/default/azuredesk; echo "$AMBIENTE")"
+     SRC="/opt/azuredesk/ambientes/$AMB"
+     DST="/mnt/backup/azuredesk"
+     STAMP="$(date +%Y%m%d-%H%M)"
+     mkdir -p "$DST"
+
+     # Cópia consistente do SQLite sem parar o console.
+     sqlite3 "$SRC/data-console/server.db" ".backup '/tmp/server-$STAMP.db'"
+
+     tar -czf "$DST/azuredesk-$AMB-$STAMP.tar.gz" \
+         -C "$SRC" data-rustdesk/id_ed25519 data-rustdesk/id_ed25519.pub \
+                   .env config/server.yaml \
+         -C /tmp "server-$STAMP.db" \
+         -C /etc default/azuredesk
+
+     rm -f "/tmp/server-$STAMP.db"
+     find "$DST" -name 'azuredesk-*.tar.gz' -mtime +30 -delete
+
+   chmod 700 /usr/local/sbin/backup-azuredesk.sh
+   ( crontab -l 2>/dev/null; echo "30 2 * * * /usr/local/sbin/backup-azuredesk.sh" ) | crontab -
+
+   O .tar.gz contém a chave privada e os secrets: o destino precisa ter
+   permissão restrita e, se sair da sua rede, criptografia.
+
+ 13.3 Nobreak (NUT) no host Proxmox
+ ----------------------------------
+   apt install -y nut
+   nut-scanner -U                       # descobre o modelo no USB
+
+   Configure /etc/nut/ups.conf, upsd.conf, upsd.users e upsmon.conf conforme o
+   modelo, com MODE=standalone em /etc/nut/nut.conf. Valide:
+
+     upsc <nome-da-ups>                 # deve mostrar carga e bateria
+
+   Teste real: puxe o cabo da tomada e confirme que o host inicia o shutdown
+   ordenado antes de a bateria acabar. Nobreak não testado é nobreak que você
+   supõe que funciona.
+
+ 13.4 O ciclo obrigatório (memoria.md §8)
+ ----------------------------------------
+   BACKUP -> RESTORE -> VALIDAÇÃO. "Backup criado" não conta.
+
+   Teste de restore, numa VM descartável:
+     1. Restaure o .tar.gz em /opt/azuredesk/ambientes/<AMBIENTE>/
+     2. Renomeie server-<stamp>.db para data-console/server.db
+     3. Suba o stack (§9.1)
+     4. ./servidor/scripts/healthcheck.sh -v  ->  tem de passar
+     5. Faça login no console e confirme que a lista de dispositivos veio
+
+   Faça esse teste ANTES de a frota entrar, e repita a cada mudança grande.
+
+
+==============================================================================
+ 14. VALIDAÇÃO FINAL E TROUBLESHOOTING
+==============================================================================
+
+ 14.1 Checklist de aceite
+ ------------------------
+   [ ] healthcheck.sh -v passa sem [FAIL]
+   [ ] ss -lntup mostra 21114/21115/21116-TCP/21116-UDP/21117
+   [ ] Console abre e o login do admin funciona
+   [ ] signKey trocado e diferente entre HML e PRD
+   [ ] git status não mostra .env nem server.yaml
+   [ ] Timer do auto-update ativo (systemctl list-timers)
+   [ ] Endpoint de teste aparece SOZINHO no console (auto-registro)
+   [ ] Conexão remota estabelecida de fora da rede
+   [ ] Backup rodou E foi restaurado com sucesso numa VM de teste
+   [ ] Nobreak testado com queda real de energia
+   [ ] Snapshot da VM tirado antes da primeira promoção para produção
+
+ 14.2 Sintomas e causas prováveis
+ --------------------------------
+   Endpoint fica sempre offline, mas o console abre normal
+     -> UDP 21116 bloqueado (roteador, ufw ou firewall do Proxmox). É a
+        causa em quase todos os casos.
+
+   Console retorna erro de parse do YAML e não sobe
+     -> config/server.yaml virou DIRETÓRIO porque o compose subiu antes de o
+        arquivo existir. Remova o diretório, copie o .example e suba de novo.
+
+   UI do console em branco / assets 404
+     -> staticdir do server.yaml precisa ser o ABSOLUTO /app/dist
+        (memoria.md §6.1).
+
+   Máquinas de fora conectam, as da LAN não
+     -> falta NAT loopback no roteador (Server-Install.txt §1.4).
+
+   Dispositivos alternam entre online e offline
+     -> relógio fora de sincronia (§5.3), ou deviceCheckJob.duration curto
+        demais para links instáveis.
+
+   Auto-update saiu com código 9
+     -> a atualização falhou E o rollback também. Ambiente exige intervenção
+        manual: pare o timer, leia o journalctl e resolva antes de religar.
+
+   docker compose não é reconhecido
+     -> foi instalado o docker.io do Debian em vez do repositório oficial
+        (§6.1).
+
+ 14.3 Comandos do dia a dia
+ --------------------------
+   export AMBIENTE=<AMBIENTE>
+   cd /opt/azuredesk
+
+   ./servidor/scripts/healthcheck.sh -v
+   journalctl -u azuredesk-autoupdate -n 100 --no-pager
+
+   docker compose --project-directory ambientes/$AMBIENTE \
+                  --env-file ambientes/$AMBIENTE/.env \
+                  -f servidor/compose.yml logs -f console
+
+   systemctl stop azuredesk-autoupdate.timer      # congelar antes de mexer
+   systemctl start azuredesk-autoupdate.timer     # religar depois
+
+
+==============================================================================
+ 15. O QUE FICA PENDENTE APÓS ESTE ROTEIRO
+==============================================================================
+
+   1. DOMÍNIO (memoria.md §11.2) — bloqueia o §12 e, com ele, a instalação
+      definitiva da frota. É a única pendência no caminho crítico.
+
+   2. Fixar versões (memoria.md §9): após o PoC validar, registrar no
+      manifesto as versões de Docker, do SO e do cliente RustDesk. Em
+      produção o console já vai por digest, nunca :latest.
+
+   3. Branding (memoria.md §11.6): console web (barato) e cliente RustDesk
+      (caro — fork em Rust + certificado de assinatura). Só o segundo é
+      visível ao cliente final.
+
+==============================================================================
