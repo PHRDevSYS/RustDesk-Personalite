@@ -33,7 +33,7 @@ if ! flock -n 9; then
   exit 0
 fi
 
-[ -f "$ENVFILE" ] || { log "ambientes/$AMBIENTE/.env não existe — servidor não provisionado" ERRO; exit 2; }
+# O provisionamento do ambiente (.env e config/server.yaml) é validado em comum.sh.
 
 log "=== auto-update iniciado (ambiente: $AMBIENTE, branch: $BRANCH) ==="
 
@@ -78,8 +78,20 @@ fi
 log "versão ${VER_DEPOIS:-?} | hbbs/hbbr: $RUSTDESK_SERVER_IMAGE | console: $CONSOLE_IMAGE"
 
 subir() {
+  # PIPESTATUS porque o `| sed` mascara o código de saída do docker: sem isso,
+  # um pull que falha (digest inexistente, registry fora) passaria batido e só
+  # apareceria depois como healthcheck falhando, com diagnóstico errado.
   compose pull --quiet 2>&1 | sed 's/^/    /'
+  if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+    log "docker compose pull falhou — imagem inacessível ou digest inexistente" ERRO
+    return 1
+  fi
   compose up -d --remove-orphans 2>&1 | sed 's/^/    /'
+  if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+    log "docker compose up -d falhou" ERRO
+    return 1
+  fi
+  return 0
 }
 
 validar() {
@@ -95,8 +107,7 @@ validar() {
   return 1
 }
 
-subir
-if validar; then
+if subir && validar; then
   printf '%s\n' "$VER_DEPOIS" > "$ENVDIR/.versao-aplicada"
   log "=== atualizado para ${VER_DEPOIS:-?} (${NOVO:0:7}) — healthcheck PASS ==="
   exit 0
@@ -107,9 +118,7 @@ log "healthcheck FALHOU após a atualização — revertendo para ${ATUAL:0:7}" 
 git -C "$ROOT" reset --hard --quiet "$ATUAL"
 export RUSTDESK_SERVER_IMAGE="$IMG_SERVER_ANTES"
 export CONSOLE_IMAGE="$IMG_CONSOLE_ANTES"
-subir
-
-if validar; then
+if subir && validar; then
   log "=== rollback concluído: de volta em ${VER_ANTES:-?}. A versão ${VER_DEPOIS:-?} NÃO foi aplicada. ===" WARN
   exit 1
 fi

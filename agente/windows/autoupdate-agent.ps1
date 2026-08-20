@@ -68,6 +68,43 @@ function Exit-With {
     exit $Code
 }
 
+# Atualiza este proprio script a partir da branch do ambiente.
+# Roda em TODA execucao, nao so quando ha nova versao do RustDesk: se dependesse
+# disso, uma correcao neste script so chegaria a frota quando o cliente mudasse
+# de versao - podendo levar meses.
+# Substituir o arquivo com ele em execucao e seguro: o PowerShell ja carregou o
+# conteudo em memoria; a troca vale a partir da proxima execucao.
+function Update-Script {
+    param([string]$Ambiente)
+    try {
+        $scriptUrl = "https://raw.githubusercontent.com/$Repo/$Ambiente/agente/windows/autoupdate-agent.ps1"
+        $novoTmp = Join-Path $env:TEMP 'autoupdate-agent.new.ps1'
+        Invoke-WebRequest -Uri $scriptUrl -OutFile $novoTmp -UseBasicParsing -TimeoutSec 60 `
+            -Headers @{ 'Cache-Control' = 'no-cache' }
+
+        $destino = Join-Path $InstalDir 'autoupdate-agent.ps1'
+        $atual = ''
+        if (Test-Path $destino) { $atual = (Get-FileHash $destino -Algorithm SHA256).Hash }
+
+        if ((Get-FileHash $novoTmp -Algorithm SHA256).Hash -ne $atual) {
+            # So substitui se o novo arquivo for PowerShell valido. Language.Parser
+            # pega erros que PSParser::Tokenize deixa passar (ex.: $Var: lido como
+            # variavel qualificada por drive).
+            $tokens = $null; $erros = $null
+            [void][Management.Automation.Language.Parser]::ParseFile($novoTmp, [ref]$tokens, [ref]$erros)
+            if ($erros -and $erros.Count -gt 0) {
+                Write-Log "Script remoto com $($erros.Count) erro(s) de sintaxe - mantido o atual." 'WARN'
+            } else {
+                Copy-Item $novoTmp $destino -Force
+                Write-Log 'Script de auto-update atualizado a partir da branch.'
+            }
+        }
+        Remove-Item $novoTmp -Force -ErrorAction SilentlyContinue
+    } catch {
+        Write-Log "Auto-update do script falhou (nao bloqueia): $_" 'WARN'
+    }
+}
+
 # ===========================================================================
 # MODO REGISTRAR — instala o script e cria a Tarefa Agendada
 # ===========================================================================
@@ -91,8 +128,12 @@ if ($Registrar) {
     $gatilhoBoot = New-ScheduledTaskTrigger -AtStartup
     $gatilhoBoot.Delay = 'PT5M'
 
+    # -RepetitionDuration e obrigatorio: sem ele a repeticao para depois de um
+    # dia e o endpoint deixa de verificar ate o proximo boot. MaxValue lanca
+    # excecao no PS 5.1; 3650 dias e o equivalente pratico de "indefinidamente".
     $gatilhoCiclo = New-ScheduledTaskTrigger -Once -At (Get-Date).Date.AddHours(3) `
-        -RepetitionInterval (New-TimeSpan -Hours 6)
+        -RepetitionInterval (New-TimeSpan -Hours 6) `
+        -RepetitionDuration (New-TimeSpan -Days 3650)
 
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     $config = New-ScheduledTaskSettingsSet -StartWhenAvailable `
@@ -130,6 +171,9 @@ try {
 } catch {
     Exit-With 1 "Nao foi possivel ler o manifesto em $url : $_"
 }
+
+# Antes de qualquer decisao sobre o RustDesk: manter este script em dia.
+Update-Script -Ambiente $Ambiente
 
 $alvo = $manifesto.agente.versao
 if (-not $alvo) { Exit-With 1 'Manifesto sem agente.versao.' }
@@ -171,12 +215,21 @@ if (-not $Forcar) {
 }
 
 # ------------------------------------------------------ download + SHA256
-$sha = $manifesto.agente.sha256
+$sha = "$($manifesto.agente.sha256)".Trim()
 if ([string]::IsNullOrWhiteSpace($sha)) {
     Exit-With 2 'Manifesto sem agente.sha256. Recusando instalar binario nao verificado.'
 }
+if ($sha -notmatch '^[0-9a-fA-F]{64}$') {
+    Exit-With 2 "agente.sha256 nao e um SHA-256 valido ('$sha'). Recusando."
+}
 
-$origem = $manifesto.agente.url
+$origem = "$($manifesto.agente.url)".Trim()
+# O binario e executado como SYSTEM. Sem HTTPS, qualquer um na rota troca o
+# arquivo - e o hash viria do mesmo canal comprometido se a URL do manifesto
+# tambem fosse insegura.
+if ($origem -notmatch '^https://') {
+    Exit-With 2 "agente.url nao usa HTTPS ('$origem'). Recusando."
+}
 $tmp = Join-Path $env:TEMP "rustdesk-$alvo.exe"
 Write-Log "Baixando $origem"
 try {
@@ -235,32 +288,6 @@ while ($svc.Status -ne 'Running' -and (Get-Date) -lt $deadline) {
     $svc.Refresh()
 }
 if ($svc.Status -ne 'Running') { Exit-With 4 "Servico nao voltou a Running (estado: $($svc.Status))." }
-
-# ------------------------------------------------------- auto-update do script
-# Sem isto, correções neste próprio script nunca chegariam à frota.
-try {
-    $scriptUrl = "https://raw.githubusercontent.com/$Repo/$Ambiente/agente/windows/autoupdate-agent.ps1"
-    $novoTmp = Join-Path $env:TEMP 'autoupdate-agent.new.ps1'
-    Invoke-WebRequest -Uri $scriptUrl -OutFile $novoTmp -UseBasicParsing -TimeoutSec 60 `
-        -Headers @{ 'Cache-Control' = 'no-cache' }
-    $destino = Join-Path $InstalDir 'autoupdate-agent.ps1'
-    $atual = ''
-    if (Test-Path $destino) { $atual = (Get-FileHash $destino -Algorithm SHA256).Hash }
-    if ((Get-FileHash $novoTmp -Algorithm SHA256).Hash -ne $atual) {
-        # Só substitui se o novo arquivo for PowerShell sintaticamente válido.
-        $erros = $null
-        [void][Management.Automation.PSParser]::Tokenize((Get-Content $novoTmp -Raw), [ref]$erros)
-        if ($erros -and $erros.Count -gt 0) {
-            Write-Log "Script remoto com $($erros.Count) erro(s) de sintaxe - mantido o atual." 'WARN'
-        } else {
-            Copy-Item $novoTmp $destino -Force
-            Write-Log 'Script de auto-update atualizado a partir da branch.'
-        }
-    }
-    Remove-Item $novoTmp -Force -ErrorAction SilentlyContinue
-} catch {
-    Write-Log "Auto-update do script falhou (nao bloqueia): $_" 'WARN'
-}
 
 Set-Content -Path "$EstadoDir\versao-aplicada.txt" -Value $manifesto.versao -Encoding ascii -NoNewline
 Exit-With 0 "=== Atualizado para RustDesk $alvo (release $($manifesto.versao)) ==="

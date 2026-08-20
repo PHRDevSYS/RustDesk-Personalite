@@ -5,9 +5,9 @@
 # Instalação (no servidor, como root):
 #   git clone https://github.com/PHRDevSYS/RustDesk-Personalite.git /opt/azuredesk
 #   cd /opt/azuredesk && git checkout producao
-#   # provisionar ambientes/producao/.env e config/server.yaml
-#   sed -i 's/^Environment=AMBIENTE=.*/Environment=AMBIENTE=producao/' \
-#       servidor/systemd/azuredesk-autoupdate.service
+#   # provisionar ambientes/producao/.env e ambientes/producao/config/server.yaml
+#
+#   echo 'AMBIENTE=producao' > /etc/default/azuredesk
 #   cp servidor/systemd/azuredesk-autoupdate.* /etc/systemd/system/
 #   systemctl daemon-reload
 #   systemctl enable --now azuredesk-autoupdate.service azuredesk-autoupdate.timer
@@ -21,7 +21,14 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
-Environment=AMBIENTE=homologacao
+
+# O ambiente vem de /etc/default/azuredesk, FORA do repositório — e sem o "-",
+# de modo que a ausência do arquivo faz o serviço falhar em vez de assumir um
+# padrão. Definir Environment=AMBIENTE=... aqui seria editar arquivo versionado,
+# que o próprio auto-update reverte no `git reset --hard`: um servidor de
+# produção poderia voltar silenciosamente a apontar para homologação.
+EnvironmentFile=/etc/default/azuredesk
+
 WorkingDirectory=/opt/azuredesk
 ExecStart=/opt/azuredesk/servidor/scripts/autoupdate-servidor.sh
 # O rollback interno já trata a falha; um exit != 0 significa que o ambiente

@@ -164,8 +164,10 @@ cp ambientes/producao/.env.example              ambientes/producao/.env
 cp ambientes/producao/config/server.yaml.example ambientes/producao/config/server.yaml
 # preencher os dois; gerar o signKey com: openssl rand -base64 32
 
-sed -i 's/^Environment=AMBIENTE=.*/Environment=AMBIENTE=producao/' \
-    servidor/systemd/azuredesk-autoupdate.service
+# O ambiente vive FORA do repositório: editar a unit versionada seria revertido
+# pelo `git reset --hard` do próprio auto-update.
+echo 'AMBIENTE=producao' > /etc/default/azuredesk
+
 cp servidor/systemd/azuredesk-autoupdate.* /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now azuredesk-autoupdate.service azuredesk-autoupdate.timer
@@ -175,6 +177,10 @@ journalctl -u azuredesk-autoupdate -f
 
 `.env`, `config/server.yaml` e os diretórios de dados são ignorados pelo Git, e
 por isso sobrevivem intactos ao `git reset --hard` do auto-update.
+`/etc/default/azuredesk` fica fora do repositório pelo mesmo motivo — é o que
+impede um servidor de produção de voltar silenciosamente a apontar para
+homologação. A unit exige esse arquivo (`EnvironmentFile=` sem `-`): se sumir,
+o serviço falha em vez de assumir um padrão.
 
 **Operação manual:**
 

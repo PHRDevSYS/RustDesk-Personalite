@@ -224,11 +224,23 @@ if ($SemAutoUpdate) {
     if (-not (Test-Path $updater)) {
         Exit-With 6 "autoupdate-agent.ps1 não encontrado em $PSScriptRoot — copie a pasta agente\windows inteira."
     }
+    # O updater sinaliza falha com `exit N`, que NÃO gera exceção capturável no
+    # chamador — só try/catch aqui deixaria passar despercebida a máquina que
+    # ficou sem auto-update. Para script .ps1 invocado com &, o código de saída
+    # chega em $LASTEXITCODE.
+    $global:LASTEXITCODE = 0
     try {
-        & $updater -Registrar -Ambiente $Ambiente | ForEach-Object { Write-Log $_ }
+        & $updater -Registrar -Ambiente $Ambiente
     } catch {
         Exit-With 6 "Falha ao registrar o auto-update: $_"
     }
+    if ($LASTEXITCODE -ne 0) {
+        Exit-With 6 "autoupdate-agent.ps1 -Registrar saiu com código $LASTEXITCODE."
+    }
+
+    $tarefa = Get-ScheduledTask -TaskName 'AzureControlDesk - AutoUpdate' -ErrorAction SilentlyContinue
+    if (-not $tarefa) { Exit-With 6 'Tarefa Agendada de auto-update não existe após o registro.' }
+    Write-Log "Auto-update registrado (tarefa em estado: $($tarefa.State))."
 }
 
 # ------------------------------------------------------------------- coleta do ID

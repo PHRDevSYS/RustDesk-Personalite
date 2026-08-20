@@ -222,24 +222,34 @@ if ($Para -eq 'producao' -and -not $SemConfirmar) {
     if ($r -ne 'producao') { Erro 'Cancelado.' }
 }
 
-Git-Ok checkout $Para | Out-Null
-Git-Ok merge --ff-only "origin/$origem" | Out-Null
-Git-Ok push origin $Para | Out-Null
-Passo "$Para agora em $($shaOrigem.Substring(0,7))"
+# try/finally para não abandonar o operador numa branch de ambiente se algo
+# falhar no meio: o próximo comando dele seria executado no lugar errado.
+try {
+    Git-Ok checkout $Para | Out-Null
+    Git-Ok merge --ff-only "origin/$origem" | Out-Null
+    Git-Ok push origin $Para | Out-Null
+    Passo "$Para agora em $($shaOrigem.Substring(0,7))"
 
-if ($Para -eq 'producao') {
-    $tag = "v$versaoRelease"
-    $existe = (& git -C $Raiz tag --list $tag) -join ''
-    if ($existe) {
-        Aviso "Tag $tag já existe — não recriada. Suba a versão no manifesto para o próximo release."
-    } else {
-        Git-Ok tag -a $tag -m "Producao: release $versaoRelease" | Out-Null
-        Git-Ok push origin $tag | Out-Null
-        Passo "Tag $tag criada e publicada"
+    if ($Para -eq 'producao') {
+        $tag = "v$versaoRelease"
+        $existe = (& git -C $Raiz tag --list $tag) -join ''
+        if ($existe) {
+            Aviso "Tag $tag já existe — não recriada. Suba a versão no manifesto para o próximo release."
+        } else {
+            Git-Ok tag -a $tag -m "Producao: release $versaoRelease" | Out-Null
+            Git-Ok push origin $tag | Out-Null
+            Passo "Tag $tag criada e publicada"
+        }
+    }
+} finally {
+    $agora = (& git -C $Raiz rev-parse --abbrev-ref HEAD)
+    if ($agora -and $agora.Trim() -ne $branchAtual) {
+        & git -C $Raiz checkout $branchAtual | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Aviso "Não foi possível voltar para '$branchAtual'. Você está em '$($agora.Trim())'."
+        }
     }
 }
-
-Git-Ok checkout $branchAtual | Out-Null
 Write-Host ''
 Passo "Concluído. De volta em $branchAtual."
 if ($Para -eq 'homologacao') {
